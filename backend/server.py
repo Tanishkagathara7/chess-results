@@ -275,7 +275,16 @@ async def get_player_results(player_id: str):
     ]
     
     results = await db.tournament_results.aggregate(pipeline).to_list(1000)
-    return results
+    # Parse results to handle any ObjectId issues
+    parsed_results = []
+    for result in results:
+        parsed_result = parse_from_mongo(result)
+        # Ensure tournament is also parsed
+        if 'tournament' in parsed_result:
+            parsed_result['tournament'] = parse_from_mongo(parsed_result['tournament'])
+        parsed_results.append(parsed_result)
+    
+    return parsed_results
 
 # Search Route
 @api_router.get("/search")
