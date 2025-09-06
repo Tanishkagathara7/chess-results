@@ -8,7 +8,7 @@ import requests
 import json
 from datetime import datetime, timedelta
 
-API_BASE = "https://chess-tracker-1.preview.emergentagent.com/api"
+API_BASE = "http://localhost:3001/api"
 
 # Sample federations
 federations = [

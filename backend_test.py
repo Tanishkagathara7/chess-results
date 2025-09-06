@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timezone
 
 class ChessAPITester:
-    def __init__(self, base_url="https://chess-tracker-1.preview.emergentagent.com"):
+    def __init__(self, base_url="http://localhost:3001"):
         self.base_url = base_url
         self.api_url = f"{base_url}/api"
         self.tests_run = 0
