@@ -7,6 +7,7 @@ const { v4: uuidv4 } = require('uuid');
 const Joi = require('joi');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const googleFormsService = require('./googleFormsService');
 require('dotenv').config();
 
 const app = express();
@@ -72,7 +73,13 @@ const tournamentCreateSchema = Joi.object({
     ).optional().messages({
         'array.base': 'Round eliminations must be an array'
     }),
-    tournament_type: Joi.string().valid('swiss', 'knockout', 'round_robin').default('swiss')
+    tournament_type: Joi.string().valid('swiss', 'knockout', 'round_robin').default('swiss'),
+    // Registration settings
+    enable_registration: Joi.boolean().default(true),
+    registration_deadline: Joi.date().iso().optional(),
+    max_participants: Joi.number().integer().min(2).max(500).optional(),
+    entry_fee: Joi.number().min(0).optional(),
+    registration_instructions: Joi.string().max(1000).optional()
 }).custom((value, helpers) => {
     const { start_date, end_date, rounds, round_eliminations, elimination_per_round } = value;
     const today = new Date();
@@ -135,6 +142,26 @@ const tournamentCreateSchema = Joi.object({
             if (totalEliminations === 0) {
                 return helpers.message('Knockout tournaments must have some eliminations across rounds');
             }
+            
+            // Validate knockout tournament math:
+            // If eliminating E players per round for R rounds, we need at least E*R + 1 players
+            // For the final round to make sense, we need at least 2 players remaining
+            const maxEliminationsPerRound = Math.max(...round_eliminations.map(re => re.eliminations));
+            if (maxEliminationsPerRound >= rounds) {
+                return helpers.message(`Cannot eliminate ${maxEliminationsPerRound} players per round in a ${rounds}-round tournament`);
+            }
+            
+            // Calculate if tournament can logically end
+            // Assuming we start with N players, after R-1 rounds of eliminations, we should have >= 2 players for final round
+            const eliminationsBeforeFinal = round_eliminations
+                .filter(re => re.round < rounds)
+                .reduce((sum, re) => sum + re.eliminations, 0);
+            
+            if (eliminationsBeforeFinal > 0) {
+                // This validation requires knowing participant count, which we don't have here
+                // We'll validate this when participants are added
+                console.log(`ℹ️ Tournament configured for ${eliminationsBeforeFinal} eliminations before final round`);
+            }
         }
     }
     
@@ -189,6 +216,101 @@ const createDocument = (data, schema = null) => {
         created_at: new Date().toISOString()
     };
     return document;
+};
+
+// Generate Google Form URL for tournament registration
+const generateRegistrationFormURL = async (tournament) => {
+    try {
+        return await googleFormsService.createTournamentRegistrationForm(tournament);
+    } catch (error) {
+        console.error('❌ Error generating registration form:', error.message);
+        // Fallback to template URL
+        const formTitle = encodeURIComponent(`${tournament.name} - Registration`);
+        const formDescription = encodeURIComponent(
+            `Register for ${tournament.name}\n\n` +
+            `Location: ${tournament.location}\n` +
+            `Date: ${new Date(tournament.start_date).toLocaleDateString()} - ${new Date(tournament.end_date).toLocaleDateString()}\n` +
+            `Rounds: ${tournament.rounds}\n` +
+            `Time Control: ${tournament.time_control}\n` +
+            `Arbiter: ${tournament.arbiter}\n\n` +
+            `${tournament.registration_instructions || 'Please fill out all required fields to register for this tournament.'}`
+        );
+        
+        return {
+            enabled: true,
+            template_url: `https://docs.google.com/forms/create?title=${formTitle}&description=${formDescription}`,
+            form_id: null,
+            registration_url: null,
+            webhook_url: `${process.env.BACKEND_URL || 'http://localhost:3001'}/api/tournaments/${tournament.id}/register-webhook`,
+            instructions: 'Use the template URL to create a Google Form, then update the tournament with the actual form URL'
+        };
+    }
+};
+
+// Validate knockout tournament logic
+const validateKnockoutLogic = (tournament, participantCount) => {
+    if (tournament.tournament_type !== 'knockout') return { valid: true };
+    
+    const totalRounds = tournament.rounds;
+    const roundEliminations = tournament.round_eliminations || [];
+    
+    if (roundEliminations.length === 0) {
+        return { valid: false, error: 'Knockout tournament must have elimination configuration' };
+    }
+    
+    // Calculate total eliminations across all rounds
+    const totalEliminations = roundEliminations.reduce((sum, re) => sum + re.eliminations, 0);
+    
+    // For a proper knockout: participants - eliminations = 1 (winner)
+    const remainingPlayers = participantCount - totalEliminations;
+    
+    if (remainingPlayers < 1) {
+        return { 
+            valid: false, 
+            error: `Too many eliminations: ${totalEliminations} eliminations from ${participantCount} players leaves ${remainingPlayers} players` 
+        };
+    }
+    
+    if (remainingPlayers > 1) {
+        return { 
+            valid: false, 
+            error: `Not enough eliminations: ${totalEliminations} eliminations from ${participantCount} players leaves ${remainingPlayers} players (should be 1 winner)` 
+        };
+    }
+    
+    // Check each round makes sense
+    let playersRemaining = participantCount;
+    for (let roundNum = 1; roundNum <= totalRounds; roundNum++) {
+        const roundElim = roundEliminations.find(re => re.round === roundNum);
+        const eliminations = roundElim ? roundElim.eliminations : 0;
+        
+        if (roundNum === totalRounds) {
+            // Final round should have 2 players, no eliminations (winner determined by game result)
+            if (playersRemaining !== 2) {
+                return {
+                    valid: false,
+                    error: `Final round ${roundNum} should have exactly 2 players, but has ${playersRemaining}`
+                };
+            }
+            if (eliminations > 0) {
+                return {
+                    valid: false,
+                    error: `Final round ${roundNum} should not have eliminations (winner determined by game result)`
+                };
+            }
+        } else {
+            // Non-final rounds need at least eliminations + 2 players to continue
+            if (playersRemaining <= eliminations) {
+                return {
+                    valid: false,
+                    error: `Round ${roundNum}: Cannot eliminate ${eliminations} from ${playersRemaining} players`
+                };
+            }
+            playersRemaining -= eliminations;
+        }
+    }
+    
+    return { valid: true, optimalRounds: participantCount - 1 };
 };
 
 const handleValidationError = (error) => {
@@ -345,6 +467,14 @@ app.post('/api/tournaments', authenticateToken, asyncHandler(async (req, res) =>
     
     console.log('✅ Tournament validation passed:', JSON.stringify(value, null, 2));
     const tournament = createDocument(value);
+    
+    // Generate registration form URLs if registration is enabled
+    if (value.enable_registration !== false) {
+        const registrationData = await generateRegistrationFormURL(tournament);
+        tournament.registration = registrationData;
+        console.log('📋 Registration form data generated:', registrationData.registration_url || registrationData.template_url);
+    }
+    
     await db.collection('tournaments').insertOne(tournament);
     console.log('✅ Tournament created successfully:', tournament.id);
     res.json(tournament);
@@ -1069,6 +1199,383 @@ app.post('/api/tournaments/:tournament_id/rounds/:round/complete', authenticateT
     });
 }));
 
+// Tournament Registration Webhook (for Google Forms submissions)
+app.post('/api/tournaments/:tournament_id/register-webhook', asyncHandler(async (req, res) => {
+    const { tournament_id } = req.params;
+    
+    console.log('📋 Received registration webhook for tournament:', tournament_id);
+    console.log('📝 Registration data:', JSON.stringify(req.body, null, 2));
+    
+    try {
+        // Validate tournament exists
+        const tournament = await db.collection('tournaments').findOne({ id: tournament_id });
+        if (!tournament) {
+            return res.status(404).json({ error: 'Tournament not found' });
+        }
+        
+        // Extract player data from form submission
+        // Google Forms sends data in different formats, handle common ones
+        let playerData;
+        
+        if (req.body.form_response) {
+            // Typeform format
+            playerData = extractFromTypeform(req.body.form_response);
+        } else if (req.body.responses) {
+            // Google Forms format (via Zapier/integrations)
+            playerData = extractFromGoogleForm(req.body.responses);
+        } else {
+            // Direct format (when posted directly)
+            playerData = {
+                name: req.body.name || req.body['entry.name'],
+                rating: parseInt(req.body.rating || req.body['entry.rating']) || 0,
+                title: req.body.title || req.body['entry.title'] || '',
+                birth_year: parseInt(req.body.birth_year || req.body['entry.birth_year']) || null,
+                email: req.body.email || req.body['entry.email'],
+                phone: req.body.phone || req.body['entry.phone'],
+                federation: req.body.federation || req.body['entry.federation'] || '',
+                tournament_id: tournament_id
+            };
+        }
+        
+        if (!playerData.name) {
+            return res.status(400).json({ error: 'Player name is required' });
+        }
+        
+        console.log('✅ Extracted player data:', playerData);
+        
+        // Check if player already exists (by name and tournament)
+        let existingPlayer = await db.collection('players').findOne({
+            name: { $regex: new RegExp(`^${playerData.name}$`, 'i') }
+        });
+        
+        let playerId;
+        if (existingPlayer) {
+            console.log('🔄 Using existing player:', existingPlayer.name);
+            playerId = existingPlayer.id;
+            
+            // Update player info if new data is better
+            const updateData = {};
+            if (playerData.rating > existingPlayer.rating) updateData.rating = playerData.rating;
+            if (playerData.title && !existingPlayer.title) updateData.title = playerData.title;
+            if (playerData.birth_year && !existingPlayer.birth_year) updateData.birth_year = playerData.birth_year;
+            
+            if (Object.keys(updateData).length > 0) {
+                await db.collection('players').updateOne(
+                    { id: existingPlayer.id },
+                    { $set: updateData }
+                );
+                console.log('🔄 Updated player info:', updateData);
+            }
+        } else {
+            // Create new player
+            const newPlayer = createDocument({
+                name: playerData.name,
+                rating: playerData.rating,
+                title: playerData.title,
+                birth_year: playerData.birth_year
+            });
+            
+            await db.collection('players').insertOne(newPlayer);
+            playerId = newPlayer.id;
+            console.log('✅ Created new player:', newPlayer.name, playerId);
+        }
+        
+        // Check if player is already registered for this tournament
+        const existingParticipant = await db.collection('tournament_participants').findOne({
+            tournament_id,
+            player_id: playerId,
+            status: { $ne: 'withdrawn' }
+        });
+        
+        if (existingParticipant) {
+            console.log('⚠️ Player already registered for this tournament');
+            return res.json({ 
+                message: 'Player already registered',
+                player_id: playerId,
+                registration_status: 'already_registered'
+            });
+        }
+        
+        // Add player to tournament
+        const participant = createDocument({
+            tournament_id,
+            player_id: playerId,
+            registration_date: new Date().toISOString(),
+            status: 'registered',
+            registration_source: 'google_form',
+            contact_email: playerData.email,
+            contact_phone: playerData.phone,
+            federation: playerData.federation
+        });
+        
+        await db.collection('tournament_participants').insertOne(participant);
+        
+        console.log('✅ Player registered for tournament successfully');
+        
+        res.json({
+            message: 'Registration successful',
+            player_id: playerId,
+            participant_id: participant.id,
+            tournament_id,
+            registration_status: 'registered'
+        });
+        
+    } catch (error) {
+        console.error('❌ Registration webhook error:', error);
+        res.status(500).json({ error: 'Registration failed', message: error.message });
+    }
+}));
+
+// Helper functions for parsing form data
+function extractFromGoogleForm(responses) {
+    // Handle Google Forms response format
+    const data = {};
+    responses.forEach(response => {
+        const question = response.question.toLowerCase();
+        const answer = response.answer;
+        
+        if (question.includes('name')) data.name = answer;
+        else if (question.includes('rating')) data.rating = parseInt(answer) || 0;
+        else if (question.includes('title')) data.title = answer;
+        else if (question.includes('birth') || question.includes('year')) data.birth_year = parseInt(answer);
+        else if (question.includes('email')) data.email = answer;
+        else if (question.includes('phone')) data.phone = answer;
+        else if (question.includes('federation') || question.includes('country')) data.federation = answer;
+    });
+    return data;
+}
+
+function extractFromTypeform(formResponse) {
+    // Handle Typeform response format
+    const data = {};
+    if (formResponse.answers) {
+        formResponse.answers.forEach(answer => {
+            const field = answer.field.ref || answer.field.title.toLowerCase();
+            const value = answer.text || answer.number || answer.email;
+            
+            if (field.includes('name')) data.name = value;
+            else if (field.includes('rating')) data.rating = parseInt(value) || 0;
+            else if (field.includes('title')) data.title = value;
+            else if (field.includes('birth') || field.includes('year')) data.birth_year = parseInt(value);
+            else if (field.includes('email')) data.email = value;
+            else if (field.includes('phone')) data.phone = value;
+            else if (field.includes('federation') || field.includes('country')) data.federation = value;
+        });
+    }
+    return data;
+}
+
+// Generate Google Form for tournament
+app.post('/api/tournaments/:tournament_id/generate-form', authenticateToken, asyncHandler(async (req, res) => {
+    const { tournament_id } = req.params;
+    
+    const tournament = await db.collection('tournaments').findOne({ id: tournament_id });
+    if (!tournament) {
+        return res.status(404).json({ error: 'Tournament not found' });
+    }
+    
+    try {
+        // Generate new registration form
+        const registrationData = await generateRegistrationFormURL(tournament);
+        
+        // Update tournament with registration data
+        await db.collection('tournaments').updateOne(
+            { id: tournament_id },
+            { 
+                $set: { 
+                    registration: registrationData,
+                    updated_at: new Date().toISOString()
+                }
+            }
+        );
+        
+        res.json({
+            message: 'Google Form generated successfully',
+            registration: registrationData
+        });
+        
+    } catch (error) {
+        console.error('❌ Error generating form:', error);
+        res.status(500).json({ 
+            error: 'Failed to generate form', 
+            message: error.message 
+        });
+    }
+}));
+
+// Get tournament registration link
+app.get('/api/tournaments/:tournament_id/registration', asyncHandler(async (req, res) => {
+    const { tournament_id } = req.params;
+    
+    const tournament = await db.collection('tournaments').findOne({ id: tournament_id });
+    if (!tournament) {
+        return res.status(404).json({ error: 'Tournament not found' });
+    }
+    
+    if (!tournament.registration) {
+        return res.status(404).json({ error: 'Registration not enabled for this tournament' });
+    }
+    
+    res.json(tournament.registration);
+}));
+
+// Update tournament registration form URL
+app.put('/api/tournaments/:tournament_id/registration', authenticateToken, asyncHandler(async (req, res) => {
+    const { tournament_id } = req.params;
+    const { registration_url, form_id } = req.body;
+    
+    if (!registration_url) {
+        return res.status(400).json({ error: 'Registration URL is required' });
+    }
+    
+    const result = await db.collection('tournaments').updateOne(
+        { id: tournament_id },
+        { 
+            $set: { 
+                'registration.registration_url': registration_url,
+                'registration.form_id': form_id,
+                'registration.updated_at': new Date().toISOString()
+            }
+        }
+    );
+    
+    if (result.matchedCount === 0) {
+        return res.status(404).json({ error: 'Tournament not found' });
+    }
+    
+    res.json({ message: 'Registration URL updated successfully' });
+}));
+
+// Get tournament registrations and participant management
+app.get('/api/tournaments/:tournament_id/registrations', authenticateToken, asyncHandler(async (req, res) => {
+    const { tournament_id } = req.params;
+    
+    // Validate tournament exists
+    const tournament = await db.collection('tournaments').findOne({ id: tournament_id });
+    if (!tournament) {
+        return res.status(404).json({ error: 'Tournament not found' });
+    }
+    
+    // Get all participants (both manually added and registered)
+    const participants = await db.collection('tournament_participants').aggregate([
+        { $match: { tournament_id } },
+        {
+            $lookup: {
+                from: 'players',
+                localField: 'player_id',
+                foreignField: 'id',
+                as: 'player'
+            }
+        },
+        { $unwind: '$player' },
+        {
+            $project: {
+                id: 1,
+                player_id: 1,
+                tournament_id: 1,
+                registration_date: 1,
+                status: 1,
+                registration_source: 1,
+                contact_email: 1,
+                contact_phone: 1,
+                federation: 1,
+                seed: 1,
+                'player.name': 1,
+                'player.rating': 1,
+                'player.title': 1,
+                'player.birth_year': 1
+            }
+        },
+        { $sort: { 'player.rating': -1, 'player.name': 1 } }
+    ]).toArray();
+    
+    // Group by registration source
+    const registered = participants.filter(p => p.registration_source === 'google_form');
+    const manual = participants.filter(p => !p.registration_source || p.registration_source === 'manual');
+    
+    // Get registration stats
+    const stats = {
+        total_participants: participants.length,
+        registered_via_form: registered.length,
+        manually_added: manual.length,
+        active: participants.filter(p => p.status === 'registered' || p.status === 'active').length,
+        withdrawn: participants.filter(p => p.status === 'withdrawn').length
+    };
+    
+    res.json({
+        tournament,
+        participants,
+        registered_players: registered,
+        manual_players: manual,
+        stats
+    });
+}));
+
+// Manage individual registration status
+app.put('/api/tournaments/:tournament_id/registrations/:participant_id', authenticateToken, asyncHandler(async (req, res) => {
+    const { tournament_id, participant_id } = req.params;
+    const { status, notes } = req.body;
+    
+    const validStatuses = ['registered', 'active', 'withdrawn', 'disqualified'];
+    if (status && !validStatuses.includes(status)) {
+        return res.status(400).json({ error: 'Invalid status' });
+    }
+    
+    const updateData = {};
+    if (status) updateData.status = status;
+    if (notes !== undefined) updateData.notes = notes;
+    updateData.updated_at = new Date().toISOString();
+    
+    const result = await db.collection('tournament_participants').updateOne(
+        { id: participant_id, tournament_id },
+        { $set: updateData }
+    );
+    
+    if (result.matchedCount === 0) {
+        return res.status(404).json({ error: 'Participant not found' });
+    }
+    
+    res.json({ message: 'Participant status updated successfully' });
+}));
+
+// Bulk approve/reject registrations
+app.post('/api/tournaments/:tournament_id/registrations/bulk-action', authenticateToken, asyncHandler(async (req, res) => {
+    const { tournament_id } = req.params;
+    const { action, participant_ids } = req.body;
+    
+    if (!['approve', 'reject', 'withdraw'].includes(action)) {
+        return res.status(400).json({ error: 'Invalid action' });
+    }
+    
+    if (!participant_ids || !Array.isArray(participant_ids)) {
+        return res.status(400).json({ error: 'participant_ids must be an array' });
+    }
+    
+    const statusMap = {
+        approve: 'active',
+        reject: 'rejected',
+        withdraw: 'withdrawn'
+    };
+    
+    const result = await db.collection('tournament_participants').updateMany(
+        { 
+            id: { $in: participant_ids },
+            tournament_id
+        },
+        { 
+            $set: {
+                status: statusMap[action],
+                updated_at: new Date().toISOString()
+            }
+        }
+    );
+    
+    res.json({ 
+        message: `${action} action completed`,
+        modified_count: result.modifiedCount
+    });
+}));
+
 // Health check endpoint
 app.get('/health', (req, res) => {
     res.json({ 
@@ -1095,6 +1602,9 @@ app.use((error, req, res, next) => {
 // Start server
 const startServer = async () => {
     await connectDB();
+    
+    // Initialize Google Forms service
+    await googleFormsService.initialize();
     
     app.listen(PORT, () => {
         console.log(`🚀 Chess Results API server running on port ${PORT}`);

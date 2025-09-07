@@ -9,13 +9,15 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Badge } from './ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Alert, AlertDescription } from './ui/alert';
-import { Trophy, Users, Plus, Edit, Trash2, Calendar, MapPin, AlertCircle, Shuffle, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Trophy, Users, Plus, Edit, Trash2, Calendar, MapPin, AlertCircle, Shuffle, ChevronLeft, ChevronRight, Settings } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { validateTournamentForm, formatDateError } from '../utils/validation';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5000';
 const API = `${BACKEND_URL}/api`;
 
 const AdminPanel = () => {
+    const navigate = useNavigate();
     // State management
     const [activeTab, setActiveTab] = useState('tournaments');
     const [tournaments, setTournaments] = useState([]);
@@ -1481,6 +1483,17 @@ const AdminPanel = () => {
                                                 >
                                                     <Users className="h-3 w-3" />
                                                 </Button>
+                                                {tournament.registration?.enabled && (
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => navigate(`/tournaments/${tournament.id}/registrations`)}
+                                                        className="text-green-600 hover:text-green-700"
+                                                        title="Manage Registrations"
+                                                    >
+                                                        <Settings className="h-3 w-3" />
+                                                    </Button>
+                                                )}
                                                 <Button
                                                     variant="outline"
                                                     size="sm"

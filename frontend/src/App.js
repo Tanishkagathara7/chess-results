@@ -7,6 +7,7 @@ import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import ProtectedRoute from "./components/ProtectedRoute";
 import AdminPanel from "./components/AdminPanel";
 import TournamentRoundResults from "./components/TournamentRoundResults";
+import RegistrationManagement from "./components/RegistrationManagement";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
@@ -440,19 +441,54 @@ const TournamentResults = () => {
     try {
       setLoading(true);
       console.log('Fetching tournament data for ID:', id);
-      const [tournamentResponse, resultsResponse, participantsResponse] = await Promise.all([
+      const [tournamentResponse, participantsResponse] = await Promise.all([
         axios.get(`${API}/tournaments/${id}`),
-        axios.get(`${API}/results?tournament_id=${id}`),
         axios.get(`${API}/tournaments/${id}/participants`)
       ]);
       
       console.log('Tournament data:', tournamentResponse.data);
-      console.log('Results data:', resultsResponse.data);
       console.log('Participants data:', participantsResponse.data);
       
       setTournament(tournamentResponse.data);
-      setResults(resultsResponse.data);
       setParticipants(participantsResponse.data);
+      
+      // Calculate final results if tournament has completed rounds
+      if (tournamentResponse.data.completed_rounds && tournamentResponse.data.completed_rounds.length > 0) {
+        const lastRound = Math.max(...tournamentResponse.data.completed_rounds);
+        console.log('Fetching final results from round:', lastRound);
+        
+        try {
+          const finalResultsResponse = await axios.get(`${API}/tournaments/${id}/rounds/${lastRound}/results`);
+          console.log('Final results data:', finalResultsResponse.data);
+          
+          // Convert our round results to the expected format
+          const formattedResults = finalResultsResponse.data.standings.map(player => ({
+            id: player.player_id,
+            player_id: player.player_id,
+            tournament_id: id,
+            rank: player.rank,
+            points: player.points,
+            tiebreak1: player.wins || 0,
+            tiebreak2: player.draws || 0, 
+            tiebreak3: player.losses || 0,
+            performance_rating: null,
+            player: {
+              id: player.player_id,
+              name: player.player_name,
+              rating: player.player_rating,
+              title: player.player_title
+            }
+          }));
+          
+          setResults(formattedResults);
+        } catch (error) {
+          console.error('Error fetching final results:', error);
+          setResults([]); // Keep empty if can't fetch
+        }
+      } else {
+        setResults([]); // No completed rounds
+      }
+      
     } catch (error) {
       console.error("Error fetching tournament data:", error);
     } finally {
@@ -569,9 +605,9 @@ const TournamentResults = () => {
                     <TableHead className="w-16">Rank</TableHead>
                     <TableHead>Player</TableHead>
                     <TableHead className="text-center">Points</TableHead>
-                    <TableHead className="text-center">TB1</TableHead>
-                    <TableHead className="text-center">TB2</TableHead>
-                    <TableHead className="text-center">TB3</TableHead>
+                    <TableHead className="text-center">Wins</TableHead>
+                    <TableHead className="text-center">Draws</TableHead>
+                    <TableHead className="text-center">Losses</TableHead>
                     <TableHead className="text-center">Rating</TableHead>
                     <TableHead className="text-center">Performance</TableHead>
                   </TableRow>
@@ -655,6 +691,11 @@ function App() {
             <Route path="/tournaments" element={<Tournaments />} />
             <Route path="/tournaments/:id" element={<TournamentResults />} />
             <Route path="/tournaments/:id/rounds/:round" element={<TournamentRoundResults />} />
+            <Route path="/tournaments/:tournamentId/registrations" element={
+              <ProtectedRoute>
+                <RegistrationManagement />
+              </ProtectedRoute>
+            } />
             <Route path="/admin" element={
               <ProtectedRoute>
                 <Admin />
