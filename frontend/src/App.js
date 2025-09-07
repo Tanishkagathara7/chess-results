@@ -403,6 +403,9 @@ import AdminPanel from "./components/AdminPanel";
 // Tournament Results Component
 const TournamentResults = () => {
   const { id } = useParams();
+  console.log('TournamentResults component - Tournament ID:', id);
+  console.log('TournamentResults component - Current location:', window.location.pathname);
+  
   const [tournament, setTournament] = useState(null);
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -564,7 +567,23 @@ const Admin = () => {
 };
 
 
+// Debug Component for unmatched routes
+const NotFound = () => {
+  const location = window.location;
+  console.log('NotFound component - Current location:', location.pathname);
+  return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="text-center">
+        <h1 className="text-2xl font-bold text-gray-900 mb-4">Route Debug</h1>
+        <p className="text-gray-600 mb-4">Current path: {location.pathname}</p>
+        <Button onClick={() => window.history.back()}>Go Back</Button>
+      </div>
+    </div>
+  );
+};
+
 function App() {
+  console.log('App component rendering');
   return (
     <div className="App">
       <AuthProvider>
@@ -579,6 +598,7 @@ function App() {
                 <Admin />
               </ProtectedRoute>
             } />
+            <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>
       </AuthProvider>
