@@ -754,6 +754,143 @@ app.delete('/api/tournaments/:tournament_id/pairings/:round', authenticateToken,
     });
 }));
 
+// Get tournament results by round
+app.get('/api/tournaments/:tournament_id/rounds/:round/results', asyncHandler(async (req, res) => {
+    const { tournament_id, round } = req.params;
+    const roundNum = parseInt(round);
+    
+    console.log(`🔍 Getting results for tournament ${tournament_id}, round ${roundNum}`);
+    
+    try {
+        // Validate tournament exists
+        const tournament = await db.collection('tournaments').findOne({ id: tournament_id });
+        if (!tournament) {
+            return res.status(404).json({ error: 'Tournament not found' });
+        }
+        
+        // Get participants
+        const participants = await db.collection('tournament_participants').aggregate([
+            { $match: { tournament_id, status: { $ne: 'withdrawn' } } },
+            {
+                $lookup: {
+                    from: 'players',
+                    localField: 'player_id',
+                    foreignField: 'id',
+                    as: 'player'
+                }
+            },
+            { $unwind: '$player' }
+        ]).toArray();
+        
+        // Get pairings up to this round
+        const allPairings = await db.collection('pairings').find({
+            tournament_id,
+            round: { $lte: roundNum }
+        }).sort({ round: 1, board_number: 1 }).toArray();
+        
+        // Initialize player stats
+        const playerStats = new Map();
+        participants.forEach(participant => {
+            playerStats.set(participant.player_id, {
+                player_id: participant.player_id,
+                player_name: participant.player.name,
+                player_rating: participant.player.rating,
+                player_title: participant.player.title,
+                points: 0,
+                games_played: 0,
+                wins: 0,
+                draws: 0,
+                losses: 0,
+                opponents: [],
+                status: participant.status
+            });
+        });
+        
+        // Calculate results from pairings
+        allPairings.forEach(pairing => {
+            const whiteId = pairing.white_player_id;
+            const blackId = pairing.black_player_id;
+            const result = pairing.result;
+            
+            // Process white player
+            if (whiteId && playerStats.has(whiteId)) {
+                const whiteStat = playerStats.get(whiteId);
+                whiteStat.games_played++;
+                
+                if (result === '1-0') {
+                    whiteStat.points += 1;
+                    whiteStat.wins++;
+                } else if (result === '1/2-1/2') {
+                    whiteStat.points += 0.5;
+                    whiteStat.draws++;
+                } else if (result === '0-1') {
+                    whiteStat.losses++;
+                } else if (!blackId) { // bye
+                    whiteStat.points += 1;
+                }
+            }
+            
+            // Process black player
+            if (blackId && playerStats.has(blackId)) {
+                const blackStat = playerStats.get(blackId);
+                blackStat.games_played++;
+                
+                if (result === '0-1') {
+                    blackStat.points += 1;
+                    blackStat.wins++;
+                } else if (result === '1/2-1/2') {
+                    blackStat.points += 0.5;
+                    blackStat.draws++;
+                } else if (result === '1-0') {
+                    blackStat.losses++;
+                }
+            }
+        });
+        
+        // Create standings
+        const standings = Array.from(playerStats.values())
+            .filter(player => player.status !== 'eliminated')
+            .sort((a, b) => {
+                if (b.points !== a.points) return b.points - a.points;
+                return (b.player_rating || 0) - (a.player_rating || 0);
+            })
+            .map((player, index) => ({ ...player, rank: index + 1 }));
+        
+        const eliminatedPlayers = Array.from(playerStats.values())
+            .filter(player => player.status === 'eliminated');
+        
+        // Get round data
+        const roundPairings = allPairings.filter(p => p.round === roundNum);
+        const completedGames = roundPairings.filter(p => p.result || !p.black_player_id).length;
+        const roundEliminations = tournament.round_eliminations?.find(re => re.round === roundNum);
+        
+        res.json({
+            tournament_id,
+            tournament_name: tournament.name,
+            round: roundNum,
+            total_rounds: tournament.rounds,
+            round_status: tournament.completed_rounds?.includes(roundNum) ? 'completed' : 'in_progress',
+            standings,
+            eliminated_players: eliminatedPlayers,
+            round_summary: {
+                total_games: roundPairings.length,
+                completed_games: completedGames,
+                eliminations_count: roundEliminations?.eliminations || 0,
+                actual_eliminations: eliminatedPlayers.length,
+                remaining_players: standings.length,
+                round_pairings: roundPairings
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Round results API error:', error);
+        res.status(500).json({ 
+            error: 'Failed to calculate round results', 
+            message: error.message 
+        });
+    }
+}));
+
 // Complete a round - mark all pairings as finalized and trigger results update
 app.post('/api/tournaments/:tournament_id/rounds/:round/complete', authenticateToken, asyncHandler(async (req, res) => {
     const { tournament_id, round } = req.params;
@@ -808,6 +945,100 @@ app.post('/api/tournaments/:tournament_id/rounds/:round/complete', authenticateT
             }
         }
     );
+    
+    // Handle eliminations for this round
+    const roundEliminations = tournament.round_eliminations?.find(re => re.round === roundNum);
+    const eliminationsCount = roundEliminations ? roundEliminations.eliminations : 0;
+    
+    if (eliminationsCount > 0) {
+        // Calculate current standings to determine who to eliminate
+        const participants = await db.collection('tournament_participants').aggregate([
+            { $match: { tournament_id, status: { $ne: 'withdrawn' } } },
+            {
+                $lookup: {
+                    from: 'players',
+                    localField: 'player_id',
+                    foreignField: 'id',
+                    as: 'player'
+                }
+            },
+            { $unwind: '$player' }
+        ]).toArray();
+        
+        // Calculate player points through this round
+        const playerStats = new Map();
+        participants.forEach(participant => {
+            playerStats.set(participant.player_id, {
+                player_id: participant.player_id,
+                points: 0,
+                player_rating: participant.player.rating
+            });
+        });
+        
+        // Get all pairings up to this round
+        const allPairings = await db.collection('pairings').find({
+            tournament_id,
+            round: { $lte: roundNum }
+        }).toArray();
+        
+        // Calculate points
+        allPairings.forEach(pairing => {
+            const whiteId = pairing.white_player_id;
+            const blackId = pairing.black_player_id;
+            const result = pairing.result;
+            
+            if (whiteId && playerStats.has(whiteId)) {
+                const whiteStat = playerStats.get(whiteId);
+                if (result === '1-0') {
+                    whiteStat.points += 1;
+                } else if (result === '1/2-1/2') {
+                    whiteStat.points += 0.5;
+                } else if (!blackId) { // bye
+                    whiteStat.points += 1;
+                }
+            }
+            
+            if (blackId && playerStats.has(blackId)) {
+                const blackStat = playerStats.get(blackId);
+                if (result === '0-1') {
+                    blackStat.points += 1;
+                } else if (result === '1/2-1/2') {
+                    blackStat.points += 0.5;
+                }
+            }
+        });
+        
+        // Sort players by points (ascending) and rating (ascending) to find bottom performers
+        const sortedPlayers = Array.from(playerStats.values())
+            .sort((a, b) => {
+                if (a.points !== b.points) return a.points - b.points;
+                return (a.player_rating || 0) - (b.player_rating || 0);
+            });
+        
+        // Eliminate the bottom performers
+        const playersToEliminate = sortedPlayers.slice(0, eliminationsCount);
+        
+        if (playersToEliminate.length > 0) {
+            const eliminationPlayerIds = playersToEliminate.map(p => p.player_id);
+            
+            await db.collection('tournament_participants').updateMany(
+                { 
+                    tournament_id, 
+                    player_id: { $in: eliminationPlayerIds }
+                },
+                { 
+                    $set: { 
+                        status: 'eliminated',
+                        eliminated_round: roundNum,
+                        eliminated_date: new Date().toISOString()
+                    }
+                }
+            );
+            
+            console.log(`✅ Eliminated ${playersToEliminate.length} players after round ${roundNum}:`, 
+                playersToEliminate.map(p => p.player_id));
+        }
+    }
     
     // Update tournament with completed round info
     const completedRounds = tournament.completed_rounds || [];

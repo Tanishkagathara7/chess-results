@@ -6,6 +6,7 @@ import { Search, Trophy, Users, Globe, Plus, Edit, Trash2, Download, LogOut } fr
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import ProtectedRoute from "./components/ProtectedRoute";
 import AdminPanel from "./components/AdminPanel";
+import TournamentRoundResults from "./components/TournamentRoundResults";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
@@ -15,8 +16,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Label } from "./components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+// Hardcode localhost for development
+const BACKEND_URL = 'http://localhost:3001';
 const API = `${BACKEND_URL}/api`;
+
+console.log('🔧 App.js Backend URL (hardcoded):', BACKEND_URL);
+console.log('🔧 App.js API URL (hardcoded):', API);
 
 // Header Component
 const Header = ({ searchQuery, setSearchQuery, onSearch, showAuthButton = false }) => {
@@ -402,6 +407,7 @@ const Players = () => {
 // Tournament Results Component
 const TournamentResults = () => {
   const { id } = useParams();
+  const navigate = useNavigate();
   console.log('TournamentResults component - Tournament ID:', id);
   console.log('TournamentResults component - Current location:', window.location.pathname);
   
@@ -420,6 +426,7 @@ const TournamentResults = () => {
   
   const [tournament, setTournament] = useState(null);
   const [results, setResults] = useState([]);
+  const [participants, setParticipants] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -433,16 +440,19 @@ const TournamentResults = () => {
     try {
       setLoading(true);
       console.log('Fetching tournament data for ID:', id);
-      const [tournamentResponse, resultsResponse] = await Promise.all([
+      const [tournamentResponse, resultsResponse, participantsResponse] = await Promise.all([
         axios.get(`${API}/tournaments/${id}`),
-        axios.get(`${API}/results?tournament_id=${id}`)
+        axios.get(`${API}/results?tournament_id=${id}`),
+        axios.get(`${API}/tournaments/${id}/participants`)
       ]);
       
       console.log('Tournament data:', tournamentResponse.data);
       console.log('Results data:', resultsResponse.data);
+      console.log('Participants data:', participantsResponse.data);
       
       setTournament(tournamentResponse.data);
       setResults(resultsResponse.data);
+      setParticipants(participantsResponse.data);
     } catch (error) {
       console.error("Error fetching tournament data:", error);
     } finally {
@@ -501,17 +511,49 @@ const TournamentResults = () => {
               <div className="text-right">
                 <Badge variant="outline" className="text-lg px-3 py-1">
                   <Trophy className="h-4 w-4 mr-1" />
-                  {results.length} players
+                  {participants.length} players
                 </Badge>
               </div>
             </div>
           </CardHeader>
         </Card>
 
-        {/* Results Table */}
+        {/* Tournament Rounds Navigation */}
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle className="flex items-center">
+              <Trophy className="h-5 w-5 mr-2" />
+              Tournament Rounds
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+              {Array.from({ length: tournament.rounds }, (_, i) => i + 1).map(roundNum => {
+                const isCompleted = tournament.completed_rounds?.includes(roundNum);
+                return (
+                  <Button
+                    key={roundNum}
+                    variant={isCompleted ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => navigate(`/tournaments/${tournament.id}/rounds/${roundNum}`)}
+                    className={isCompleted ? "bg-green-600 hover:bg-green-700" : ""}
+                  >
+                    Round {roundNum}
+                    {isCompleted && " ✓"}
+                  </Button>
+                );
+              })}
+            </div>
+            <p className="text-sm text-gray-500 mt-3">
+              Click on any round to view detailed results and standings after that round.
+            </p>
+          </CardContent>
+        </Card>
+
+        {/* Overall Results Table */}
         <Card>
           <CardHeader>
-            <CardTitle>Tournament Results</CardTitle>
+            <CardTitle>Final Tournament Results</CardTitle>
           </CardHeader>
           <CardContent>
             {results.length === 0 ? (
@@ -612,6 +654,7 @@ function App() {
             <Route path="/players" element={<Players />} />
             <Route path="/tournaments" element={<Tournaments />} />
             <Route path="/tournaments/:id" element={<TournamentResults />} />
+            <Route path="/tournaments/:id/rounds/:round" element={<TournamentRoundResults />} />
             <Route path="/admin" element={
               <ProtectedRoute>
                 <Admin />
