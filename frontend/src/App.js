@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import "./App.css";
-import { BrowserRouter, Routes, Route, Link, useNavigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Link, useNavigate, useParams } from "react-router-dom";
 import axios from "axios";
 import { Search, Trophy, Users, Globe, Plus, Edit, Trash2, Download, LogOut } from "lucide-react";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
@@ -400,6 +400,153 @@ const Players = () => {
 
 import AdminPanel from "./components/AdminPanel";
 
+// Tournament Results Component
+const TournamentResults = () => {
+  const { id } = useParams();
+  const [tournament, setTournament] = useState(null);
+  const [results, setResults] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
+
+  useEffect(() => {
+    fetchTournamentData();
+  }, [id]);
+
+  const fetchTournamentData = async () => {
+    try {
+      setLoading(true);
+      const [tournamentResponse, resultsResponse] = await Promise.all([
+        axios.get(`${API}/tournaments/${id}`),
+        axios.get(`${API}/results?tournament_id=${id}`)
+      ]);
+      
+      setTournament(tournamentResponse.data);
+      setResults(resultsResponse.data);
+    } catch (error) {
+      console.error("Error fetching tournament data:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <Header searchQuery={searchQuery} setSearchQuery={setSearchQuery} onSearch={() => {}} />
+        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <div className="text-center py-8">
+            <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+            <p className="mt-4 text-gray-600">Loading tournament results...</p>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (!tournament) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <Header searchQuery={searchQuery} setSearchQuery={setSearchQuery} onSearch={() => {}} />
+        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <div className="text-center py-8">
+            <h1 className="text-2xl font-bold text-gray-900 mb-4">Tournament Not Found</h1>
+            <p className="text-gray-600 mb-4">The tournament you're looking for doesn't exist or has been removed.</p>
+            <Button onClick={() => window.history.back()}>Go Back</Button>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <Header searchQuery={searchQuery} setSearchQuery={setSearchQuery} onSearch={() => {}} />
+      
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Tournament Info */}
+        <Card className="mb-8">
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-2xl">{tournament.name}</CardTitle>
+                <p className="text-gray-600 mt-2">
+                  {tournament.location} • {new Date(tournament.start_date).toLocaleDateString()} - {new Date(tournament.end_date).toLocaleDateString()}
+                </p>
+                <p className="text-sm text-gray-500 mt-1">
+                  {tournament.rounds} rounds • {tournament.time_control} • Arbiter: {tournament.arbiter}
+                </p>
+              </div>
+              <div className="text-right">
+                <Badge variant="outline" className="text-lg px-3 py-1">
+                  <Trophy className="h-4 w-4 mr-1" />
+                  {results.length} players
+                </Badge>
+              </div>
+            </div>
+          </CardHeader>
+        </Card>
+
+        {/* Results Table */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Tournament Results</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {results.length === 0 ? (
+              <div className="text-center py-8">
+                <Trophy className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+                <h3 className="text-lg font-medium text-gray-900 mb-2">No Results Yet</h3>
+                <p className="text-gray-600">Tournament results will appear here once they are published.</p>
+              </div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-16">Rank</TableHead>
+                    <TableHead>Player</TableHead>
+                    <TableHead className="text-center">Points</TableHead>
+                    <TableHead className="text-center">TB1</TableHead>
+                    <TableHead className="text-center">TB2</TableHead>
+                    <TableHead className="text-center">TB3</TableHead>
+                    <TableHead className="text-center">Rating</TableHead>
+                    <TableHead className="text-center">Performance</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {results.map((result, index) => (
+                    <TableRow key={result.id}>
+                      <TableCell className="font-bold">
+                        {result.rank === 1 && <span className="text-yellow-600">🥇</span>}
+                        {result.rank === 2 && <span className="text-gray-500">🥈</span>}
+                        {result.rank === 3 && <span className="text-amber-600">🥉</span>}
+                        <span className="ml-1">{result.rank}</span>
+                      </TableCell>
+                      <TableCell>
+                        <div className="font-medium">{result.player?.name}</div>
+                        {result.player?.title && (
+                          <Badge variant="secondary" className="mt-1">
+                            {result.player.title}
+                          </Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-center font-semibold">{result.points}</TableCell>
+                      <TableCell className="text-center">{result.tiebreak1}</TableCell>
+                      <TableCell className="text-center">{result.tiebreak2}</TableCell>
+                      <TableCell className="text-center">{result.tiebreak3}</TableCell>
+                      <TableCell className="text-center">{result.player?.rating || '-'}</TableCell>
+                      <TableCell className="text-center">{result.performance_rating || '-'}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+      </main>
+    </div>
+  );
+};
+
 // Admin Component
 const Admin = () => {
   const [searchQuery, setSearchQuery] = useState("");
@@ -425,6 +572,7 @@ function App() {
           <Routes>
             <Route path="/" element={<Home />} />
             <Route path="/tournaments" element={<Tournaments />} />
+            <Route path="/tournaments/:id" element={<TournamentResults />} />
             <Route path="/players" element={<Players />} />
             <Route path="/admin" element={
               <ProtectedRoute>
