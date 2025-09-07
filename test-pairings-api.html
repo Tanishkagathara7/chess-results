@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Pairings API</title>
+</head>
+<body>
+    <h1>Test Pairings API</h1>
+    <div id="output"></div>
+    
+    <script>
+        async function testAPI() {
+            const output = document.getElementById('output');
+            
+            try {
+                // First, get all tournaments
+                const tournamentsResponse = await fetch('http://localhost:5000/api/tournaments');
+                const tournaments = await tournamentsResponse.json();
+                
+                output.innerHTML += '<h3>Tournaments:</h3>';
+                output.innerHTML += '<pre>' + JSON.stringify(tournaments, null, 2) + '</pre>';
+                
+                if (tournaments.length > 0) {
+                    const tournamentId = tournaments[0].id;
+                    output.innerHTML += '<h3>Testing Pairings for Tournament: ' + tournaments[0].name + '</h3>';
+                    
+                    // Test the pairings/all endpoint
+                    const pairingsResponse = await fetch(`http://localhost:5000/api/tournaments/${tournamentId}/pairings/all`);
+                    const pairings = await pairingsResponse.json();
+                    
+                    output.innerHTML += '<h4>Pairings Response:</h4>';
+                    output.innerHTML += '<pre>' + JSON.stringify(pairings, null, 2) + '</pre>';
+                    
+                    // Test participants endpoint
+                    const participantsResponse = await fetch(`http://localhost:5000/api/tournaments/${tournamentId}/participants`);
+                    const participants = await participantsResponse.json();
+                    
+                    output.innerHTML += '<h4>Participants Response:</h4>';
+                    output.innerHTML += '<pre>' + JSON.stringify(participants, null, 2) + '</pre>';
+                }
+                
+            } catch (error) {
+                output.innerHTML += '<p style="color: red;">Error: ' + error.message + '</p>';
+                console.error('API test error:', error);
+            }
+        }
+        
+        // Run the test when page loads
+        testAPI();
+    </script>
+</body>
+</html>

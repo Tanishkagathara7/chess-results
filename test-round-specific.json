@@ -1,0 +1,16 @@
+{
+    "name": "Test Championship",
+    "location": "Test City",
+    "start_date": "2025-01-15T00:00:00.000Z",
+    "end_date": "2025-01-17T00:00:00.000Z",
+    "rounds": 4,
+    "time_control": "90+30",
+    "arbiter": "Test Arbiter",
+    "tournament_type": "knockout",
+    "round_eliminations": [
+        { "round": 1, "eliminations": 1 },
+        { "round": 2, "eliminations": 1 },
+        { "round": 3, "eliminations": 0 },
+        { "round": 4, "eliminations": 0 }
+    ]
+}

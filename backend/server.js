@@ -57,9 +57,24 @@ const tournamentCreateSchema = Joi.object({
     }),
     rounds: Joi.number().integer().min(1).max(20).required(),
     time_control: Joi.string().required(),
-    arbiter: Joi.string().required()
+    arbiter: Joi.string().required(),
+    // Support both old format (single value) and new format (array of round-specific eliminations)
+    elimination_per_round: Joi.number().integer().min(0).default(0).messages({
+        'number.min': 'Elimination per round cannot be negative'
+    }).optional(),
+    round_eliminations: Joi.array().items(
+        Joi.object({
+            round: Joi.number().integer().min(1).required(),
+            eliminations: Joi.number().integer().min(0).required().messages({
+                'number.min': 'Eliminations cannot be negative'
+            })
+        })
+    ).optional().messages({
+        'array.base': 'Round eliminations must be an array'
+    }),
+    tournament_type: Joi.string().valid('swiss', 'knockout', 'round_robin').default('swiss')
 }).custom((value, helpers) => {
-    const { start_date, end_date } = value;
+    const { start_date, end_date, rounds, round_eliminations, elimination_per_round } = value;
     const today = new Date();
     today.setHours(0, 0, 0, 0); // Set to start of today
     
@@ -85,6 +100,42 @@ const tournamentCreateSchema = Joi.object({
     
     if (durationDays > 30) {
         return helpers.message('Tournament duration cannot exceed 30 days');
+    }
+    
+    // Validate round eliminations if provided
+    if (round_eliminations && round_eliminations.length > 0) {
+        // Check that we don't have both elimination formats
+        if (elimination_per_round && elimination_per_round > 0) {
+            return helpers.message('Cannot specify both elimination_per_round and round_eliminations. Use only one format.');
+        }
+        
+        // Check for duplicate rounds
+        const roundNumbers = round_eliminations.map(re => re.round);
+        const uniqueRounds = [...new Set(roundNumbers)];
+        if (roundNumbers.length !== uniqueRounds.length) {
+            return helpers.message('Duplicate round numbers found in round_eliminations');
+        }
+        
+        // Check that all rounds are within the tournament rounds range
+        const maxRound = Math.max(...roundNumbers);
+        const minRound = Math.min(...roundNumbers);
+        
+        if (maxRound > rounds) {
+            return helpers.message(`Round elimination specified for round ${maxRound}, but tournament only has ${rounds} rounds`);
+        }
+        
+        if (minRound < 1) {
+            return helpers.message('Round numbers must be at least 1');
+        }
+        
+        // Validate that eliminations make sense for the tournament type
+        if (value.tournament_type === 'knockout') {
+            // In knockout tournaments, check that there are some eliminations overall
+            const totalEliminations = round_eliminations.reduce((sum, re) => sum + re.eliminations, 0);
+            if (totalEliminations === 0) {
+                return helpers.message('Knockout tournaments must have some eliminations across rounds');
+            }
+        }
     }
     
     return value;
@@ -284,13 +335,18 @@ app.delete('/api/players/:player_id', authenticateToken, asyncHandler(async (req
 
 // Tournament Routes
 app.post('/api/tournaments', authenticateToken, asyncHandler(async (req, res) => {
+    console.log('📅 Tournament creation request received:', JSON.stringify(req.body, null, 2));
+    
     const { error, value } = tournamentCreateSchema.validate(req.body);
     if (error) {
+        console.log('❌ Tournament validation error:', error.details);
         return res.status(400).json(handleValidationError(error));
     }
-
+    
+    console.log('✅ Tournament validation passed:', JSON.stringify(value, null, 2));
     const tournament = createDocument(value);
     await db.collection('tournaments').insertOne(tournament);
+    console.log('✅ Tournament created successfully:', tournament.id);
     res.json(tournament);
 }));
 
@@ -308,21 +364,28 @@ app.get('/api/tournaments/:tournament_id', asyncHandler(async (req, res) => {
 }));
 
 app.put('/api/tournaments/:tournament_id', authenticateToken, asyncHandler(async (req, res) => {
+    console.log('📝 Tournament update request received for ID:', req.params.tournament_id);
+    console.log('📝 Update data:', JSON.stringify(req.body, null, 2));
+    
     const { error, value } = tournamentCreateSchema.validate(req.body);
     if (error) {
+        console.log('❌ Tournament update validation error:', error.details);
         return res.status(400).json(handleValidationError(error));
     }
-
+    
+    console.log('✅ Tournament update validation passed:', JSON.stringify(value, null, 2));
     const result = await db.collection('tournaments').updateOne(
         { id: req.params.tournament_id },
         { $set: value }
     );
 
     if (result.matchedCount === 0) {
+        console.log('❌ Tournament not found for update:', req.params.tournament_id);
         return res.status(404).json({ error: 'Tournament not found' });
     }
 
     const updatedTournament = await db.collection('tournaments').findOne({ id: req.params.tournament_id });
+    console.log('✅ Tournament updated successfully:', req.params.tournament_id);
     res.json(updatedTournament);
 }));
 
@@ -409,6 +472,38 @@ app.get('/api/tournaments/:tournament_id/participants', asyncHandler(async (req,
     ]).toArray();
     
     res.json(participants);
+}));
+
+app.put('/api/tournaments/:tournament_id/participants/:player_id', authenticateToken, asyncHandler(async (req, res) => {
+    const { tournament_id, player_id } = req.params;
+    const { status } = req.body;
+    
+    // Validate status
+    const validStatuses = ['registered', 'confirmed', 'withdrawn', 'eliminated'];
+    if (!validStatuses.includes(status)) {
+        return res.status(400).json({ error: 'Invalid status' });
+    }
+    
+    const updateData = { status };
+    if (status === 'withdrawn') {
+        updateData.withdrawn_date = new Date().toISOString();
+    } else if (status === 'eliminated') {
+        updateData.eliminated_date = new Date().toISOString();
+    }
+    
+    const result = await db.collection('tournament_participants').updateOne(
+        { tournament_id, player_id },
+        { $set: updateData }
+    );
+    
+    if (result.matchedCount === 0) {
+        return res.status(404).json({ error: 'Participant not found' });
+    }
+    
+    res.json({ 
+        message: `Player status updated to ${status} successfully`,
+        status: status
+    });
 }));
 
 app.delete('/api/tournaments/:tournament_id/participants/:player_id', authenticateToken, asyncHandler(async (req, res) => {
@@ -553,6 +648,27 @@ app.post('/api/tournaments/:tournament_id/pairings', authenticateToken, asyncHan
     });
 }));
 
+// Get all pairings for results calculation (must come BEFORE the round-specific route)
+app.get('/api/tournaments/:tournament_id/pairings/all', asyncHandler(async (req, res) => {
+    const { tournament_id } = req.params;
+    console.log('📊 Fetching all pairings for tournament:', tournament_id);
+    
+    // Validate tournament exists
+    const tournament = await db.collection('tournaments').findOne({ id: tournament_id });
+    if (!tournament) {
+        console.log('❌ Tournament not found:', tournament_id);
+        return res.status(404).json({ error: 'Tournament not found' });
+    }
+    
+    const pairings = await db.collection('pairings').find({ tournament_id })
+        .sort({ round: 1, board_number: 1 }).toArray();
+    
+    console.log('✅ Found pairings:', pairings.length, 'for tournament:', tournament_id);
+    console.log('📄 Pairings data sample:', pairings.slice(0, 2));
+    
+    res.json(pairings);
+}));
+
 app.get('/api/tournaments/:tournament_id/pairings/:round', asyncHandler(async (req, res) => {
     const { tournament_id, round } = req.params;
     
@@ -574,6 +690,7 @@ app.get('/api/tournaments/:tournament_id/pairings/:round', asyncHandler(async (r
     res.json(pairings);
 }));
 
+// Get all pairings for a tournament (general endpoint)
 app.get('/api/tournaments/:tournament_id/pairings', asyncHandler(async (req, res) => {
     const { tournament_id } = req.params;
     
@@ -634,6 +751,90 @@ app.delete('/api/tournaments/:tournament_id/pairings/:round', authenticateToken,
     res.json({ 
         message: `Pairings for round ${round} deleted successfully`,
         deletedCount: result.deletedCount
+    });
+}));
+
+// Complete a round - mark all pairings as finalized and trigger results update
+app.post('/api/tournaments/:tournament_id/rounds/:round/complete', authenticateToken, asyncHandler(async (req, res) => {
+    const { tournament_id, round } = req.params;
+    
+    console.log(`🏆 Completing round ${round} for tournament ${tournament_id}`);
+    
+    // Validate tournament exists
+    const tournament = await db.collection('tournaments').findOne({ id: tournament_id });
+    if (!tournament) {
+        return res.status(404).json({ error: 'Tournament not found' });
+    }
+    
+    // Validate round number
+    const roundNum = parseInt(round);
+    if (roundNum < 1 || roundNum > tournament.rounds) {
+        return res.status(400).json({ error: `Invalid round number. Tournament has ${tournament.rounds} rounds.` });
+    }
+    
+    // Get all pairings for this round
+    const roundPairings = await db.collection('pairings').find({
+        tournament_id,
+        round: roundNum
+    }).toArray();
+    
+    if (roundPairings.length === 0) {
+        return res.status(404).json({ error: `No pairings found for round ${round}` });
+    }
+    
+    // Check if all games with opponents have results
+    const incompleteGames = roundPairings.filter(pairing => 
+        pairing.black_player && !pairing.result // Has opponent but no result
+    );
+    
+    if (incompleteGames.length > 0) {
+        return res.status(400).json({ 
+            error: `Cannot complete round: ${incompleteGames.length} game(s) still need results`,
+            incompleteGames: incompleteGames.map(g => ({
+                board: g.board_number,
+                white: g.white_player?.name,
+                black: g.black_player?.name
+            }))
+        });
+    }
+    
+    // Mark all pairings in this round as completed
+    await db.collection('pairings').updateMany(
+        { tournament_id, round: roundNum },
+        { 
+            $set: { 
+                round_status: 'completed',
+                completed_at: new Date().toISOString()
+            }
+        }
+    );
+    
+    // Update tournament with completed round info
+    const completedRounds = tournament.completed_rounds || [];
+    if (!completedRounds.includes(roundNum)) {
+        completedRounds.push(roundNum);
+        completedRounds.sort((a, b) => a - b);
+        
+        await db.collection('tournaments').updateOne(
+            { id: tournament_id },
+            { 
+                $set: { 
+                    completed_rounds: completedRounds,
+                    last_completed_round: roundNum,
+                    updated_at: new Date().toISOString()
+                }
+            }
+        );
+    }
+    
+    console.log(`✅ Round ${round} completed successfully for tournament ${tournament_id}`);
+    
+    res.json({
+        message: `Round ${round} completed successfully`,
+        tournament_id,
+        round: roundNum,
+        completed_games: roundPairings.length,
+        completed_rounds: completedRounds
     });
 }));
 
