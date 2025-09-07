@@ -406,22 +406,41 @@ const TournamentResults = () => {
   console.log('TournamentResults component - Tournament ID:', id);
   console.log('TournamentResults component - Current location:', window.location.pathname);
   
+  // Simple test - if this appears, the component is being called
+  if (!id) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <h1 className="text-2xl font-bold text-red-600">No Tournament ID Found</h1>
+          <p className="text-gray-600 mt-2">URL: {window.location.pathname}</p>
+          <Button onClick={() => window.history.back()} className="mt-4">Go Back</Button>
+        </div>
+      </div>
+    );
+  }
+  
   const [tournament, setTournament] = useState(null);
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
-    fetchTournamentData();
+    if (id) {
+      fetchTournamentData();
+    }
   }, [id]);
 
   const fetchTournamentData = async () => {
     try {
       setLoading(true);
+      console.log('Fetching tournament data for ID:', id);
       const [tournamentResponse, resultsResponse] = await Promise.all([
         axios.get(`${API}/tournaments/${id}`),
         axios.get(`${API}/results?tournament_id=${id}`)
       ]);
+      
+      console.log('Tournament data:', tournamentResponse.data);
+      console.log('Results data:', resultsResponse.data);
       
       setTournament(tournamentResponse.data);
       setResults(resultsResponse.data);
@@ -439,7 +458,8 @@ const TournamentResults = () => {
         <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           <div className="text-center py-8">
             <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-            <p className="mt-4 text-gray-600">Loading tournament results...</p>
+            <p className="mt-4 text-gray-600">Loading tournament results for ID: {id}...</p>
+            <p className="mt-2 text-sm text-gray-500">Debug: {window.location.pathname}</p>
           </div>
         </main>
       </div>
@@ -590,9 +610,9 @@ function App() {
         <BrowserRouter>
           <Routes>
             <Route path="/" element={<Home />} />
+            <Route path="/players" element={<Players />} />
             <Route path="/tournaments" element={<Tournaments />} />
             <Route path="/tournaments/:id" element={<TournamentResults />} />
-            <Route path="/players" element={<Players />} />
             <Route path="/admin" element={
               <ProtectedRoute>
                 <Admin />
