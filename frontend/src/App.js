@@ -5,6 +5,7 @@ import axios from "axios";
 import { Search, Trophy, Users, Globe, Plus, Edit, Trash2, Download, LogOut } from "lucide-react";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import ProtectedRoute from "./components/ProtectedRoute";
+import AdminPanel from "./components/AdminPanel";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
@@ -397,8 +398,6 @@ const Players = () => {
     </div>
   );
 };
-
-import AdminPanel from "./components/AdminPanel";
 
 // Tournament Results Component
 const TournamentResults = () => {
