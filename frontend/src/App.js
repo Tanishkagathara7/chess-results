@@ -2,7 +2,9 @@ import React, { useState, useEffect } from "react";
 import "./App.css";
 import { BrowserRouter, Routes, Route, Link, useNavigate } from "react-router-dom";
 import axios from "axios";
-import { Search, Trophy, Users, Globe, Plus, Edit, Trash2, Download } from "lucide-react";
+import { Search, Trophy, Users, Globe, Plus, Edit, Trash2, Download, LogOut } from "lucide-react";
+import { AuthProvider, useAuth } from "./contexts/AuthContext";
+import ProtectedRoute from "./components/ProtectedRoute";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
@@ -16,7 +18,13 @@ const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
 // Header Component
-const Header = ({ searchQuery, setSearchQuery, onSearch }) => {
+const Header = ({ searchQuery, setSearchQuery, onSearch, showAuthButton = false }) => {
+  const { isAuthenticated, logout, user } = useAuth();
+
+  const handleLogout = () => {
+    logout();
+  };
+
   return (
     <header className="bg-white border-b border-gray-200 shadow-sm">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -30,8 +38,6 @@ const Header = ({ searchQuery, setSearchQuery, onSearch }) => {
               <Link to="/" className="text-gray-600 hover:text-blue-600 font-medium">Home</Link>
               <Link to="/tournaments" className="text-gray-600 hover:text-blue-600 font-medium">Tournaments</Link>
               <Link to="/players" className="text-gray-600 hover:text-blue-600 font-medium">Players</Link>
-              <Link to="/federations" className="text-gray-600 hover:text-blue-600 font-medium">Federations</Link>
-              <Link to="/admin" className="text-gray-600 hover:text-blue-600 font-medium">Admin</Link>
             </nav>
           </div>
           <div className="flex items-center space-x-4">
@@ -49,6 +55,15 @@ const Header = ({ searchQuery, setSearchQuery, onSearch }) => {
             <Button onClick={onSearch} variant="outline" size="sm">
               Search
             </Button>
+            {showAuthButton && isAuthenticated && (
+              <div className="flex items-center space-x-3">
+                <span className="text-sm text-gray-600">Welcome, {user?.email}</span>
+                <Button onClick={handleLogout} variant="outline" size="sm">
+                  <LogOut className="h-4 w-4 mr-1" />
+                  Logout
+                </Button>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -123,7 +138,7 @@ const Home = () => {
         {searchResults && (
           <div className="mb-12">
             <h2 className="text-2xl font-bold text-gray-900 mb-6">Search Results</h2>
-            <div className="grid md:grid-cols-3 gap-6">
+            <div className="grid md:grid-cols-2 gap-6">
               {/* Players */}
               <Card>
                 <CardHeader>
@@ -137,7 +152,7 @@ const Home = () => {
                     <div key={player.id} className="py-2 border-b last:border-b-0">
                       <div className="font-medium">{player.name}</div>
                       <div className="text-sm text-gray-600">
-                        {player.federation} • Rating: {player.rating}
+                        Rating: {player.rating}
                         {player.title && <Badge variant="secondary" className="ml-2">{player.title}</Badge>}
                       </div>
                     </div>
@@ -162,24 +177,6 @@ const Home = () => {
                       </div>
                     </div>
                   )) || <p className="text-gray-500">No tournaments found</p>}
-                </CardContent>
-              </Card>
-
-              {/* Federations */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center">
-                    <Globe className="h-5 w-5 mr-2" />
-                    Federations ({searchResults.federations?.length || 0})
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {searchResults.federations?.map((federation) => (
-                    <div key={federation.id} className="py-2 border-b last:border-b-0">
-                      <div className="font-medium">{federation.name}</div>
-                      <div className="text-sm text-gray-600">Code: {federation.code}</div>
-                    </div>
-                  )) || <p className="text-gray-500">No federations found</p>}
                 </CardContent>
               </Card>
             </div>
@@ -371,7 +368,6 @@ const Players = () => {
               <TableHeader>
                 <TableRow>
                   <TableHead>Name</TableHead>
-                  <TableHead>Federation</TableHead>
                   <TableHead>Rating</TableHead>
                   <TableHead>Title</TableHead>
                   <TableHead>Birth Year</TableHead>
@@ -381,7 +377,6 @@ const Players = () => {
                 {players.map((player) => (
                   <TableRow key={player.id}>
                     <TableCell className="font-medium">{player.name}</TableCell>
-                    <TableCell>{player.federation}</TableCell>
                     <TableCell>{player.rating}</TableCell>
                     <TableCell>
                       {player.title && <Badge variant="secondary">{player.title}</Badge>}
@@ -403,142 +398,42 @@ const Players = () => {
   );
 };
 
-// Simple Admin Component
+import AdminPanel from "./components/AdminPanel";
+
+// Admin Component
 const Admin = () => {
   const [searchQuery, setSearchQuery] = useState("");
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <Header searchQuery={searchQuery} setSearchQuery={setSearchQuery} onSearch={() => {}} />
+      <Header searchQuery={searchQuery} setSearchQuery={setSearchQuery} onSearch={() => {}} showAuthButton={true} />
       
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <h1 className="text-3xl font-bold text-gray-900 mb-8">Admin Panel</h1>
-        
-        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center">
-                <Trophy className="h-5 w-5 mr-2" />
-                Tournaments
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-gray-600 mb-4">Manage tournaments and results</p>
-              <Button className="w-full">
-                <Plus className="h-4 w-4 mr-2" />
-                Add Tournament
-              </Button>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center">
-                <Users className="h-5 w-5 mr-2" />
-                Players
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-gray-600 mb-4">Manage player database</p>
-              <Button className="w-full">
-                <Plus className="h-4 w-4 mr-2" />
-                Add Player
-              </Button>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center">
-                <Globe className="h-5 w-5 mr-2" />
-                Federations
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-gray-600 mb-4">Manage chess federations</p>
-              <Button className="w-full">
-                <Plus className="h-4 w-4 mr-2" />
-                Add Federation
-              </Button>
-            </CardContent>
-          </Card>
-        </div>
+        <AdminPanel />
       </main>
     </div>
   );
 };
 
-// Simple Federations Component
-const Federations = () => {
-  const [federations, setFederations] = useState([]);
-  const [searchQuery, setSearchQuery] = useState("");
-
-  useEffect(() => {
-    fetchFederations();
-  }, []);
-
-  const fetchFederations = async () => {
-    try {
-      const response = await axios.get(`${API}/federations`);
-      setFederations(response.data);
-    } catch (error) {
-      console.error("Error fetching federations:", error);
-    }
-  };
-
-  return (
-    <div className="min-h-screen bg-gray-50">
-      <Header searchQuery={searchQuery} setSearchQuery={setSearchQuery} onSearch={() => {}} />
-      
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="flex justify-between items-center mb-6">
-          <h1 className="text-3xl font-bold text-gray-900">Federations</h1>
-        </div>
-
-        <Card>
-          <CardContent className="p-6">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Code</TableHead>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Created</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {federations.map((federation) => (
-                  <TableRow key={federation.id}>
-                    <TableCell className="font-medium">{federation.code}</TableCell>
-                    <TableCell>{federation.name}</TableCell>
-                    <TableCell>{new Date(federation.created_at).toLocaleDateString()}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-            {federations.length === 0 && (
-              <div className="text-center py-8 text-gray-500">
-                No federations found.
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </main>
-    </div>
-  );
-};
 
 function App() {
   return (
     <div className="App">
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/tournaments" element={<Tournaments />} />
-          <Route path="/players" element={<Players />} />
-          <Route path="/federations" element={<Federations />} />
-          <Route path="/admin" element={<Admin />} />
-        </Routes>
-      </BrowserRouter>
+      <AuthProvider>
+        <BrowserRouter>
+          <Routes>
+            <Route path="/" element={<Home />} />
+            <Route path="/tournaments" element={<Tournaments />} />
+            <Route path="/players" element={<Players />} />
+            <Route path="/admin" element={
+              <ProtectedRoute>
+                <Admin />
+              </ProtectedRoute>
+            } />
+          </Routes>
+        </BrowserRouter>
+      </AuthProvider>
     </div>
   );
 }

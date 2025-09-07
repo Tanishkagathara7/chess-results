@@ -7,6 +7,11 @@ const config = {
 };
 
 module.exports = {
+  devServer: {
+    client: {
+      webSocketURL: 'ws://localhost:3000/ws'
+    }
+  },
   webpack: {
     alias: {
       '@': path.resolve(__dirname, 'src'),

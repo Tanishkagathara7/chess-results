@@ -8,7 +8,7 @@ import requests
 import json
 from datetime import datetime, timedelta
 
-API_BASE = "http://localhost:3001/api"
+API_BASE = "http://localhost:3000/api"
 
 # Sample federations
 federations = [
