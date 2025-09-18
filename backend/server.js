@@ -184,6 +184,17 @@ const loginSchema = Joi.object({
     password: Joi.string().min(6).required()
 });
 
+const userRegistrationSchema = Joi.object({
+    name: Joi.string().min(2).max(50).required(),
+    email: Joi.string().email().required(),
+    password: Joi.string().min(6).required(),
+    phone: Joi.string().pattern(/^\+?[1-9]\d{1,14}$/).required().messages({
+        'string.pattern.base': 'Phone number must be in valid international format (e.g., +1234567890)'
+    }),
+    rating: Joi.number().integer().min(0).max(3000).default(0),
+    birth_year: Joi.number().integer().min(1900).max(new Date().getFullYear()).optional()
+});
+
 const tournamentParticipantSchema = Joi.object({
     tournament_id: Joi.string().required(),
     player_id: Joi.string().required(),
@@ -244,6 +255,60 @@ const generateRegistrationFormURL = async (tournament) => {
             webhook_url: `${process.env.BACKEND_URL || 'http://localhost:3001'}/api/tournaments/${tournament.id}/register-webhook`,
             instructions: 'Use the template URL to create a Google Form, then update the tournament with the actual form URL'
         };
+    }
+};
+
+// WhatsApp notification helper
+const sendWhatsAppNotification = async (phoneNumber, message) => {
+    try {
+        // Always log for debugging
+        console.log(`📱 WhatsApp notification to ${phoneNumber}:`);
+        console.log(message);
+        console.log('---');
+        
+        // Check if Twilio credentials are configured
+        if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN || !process.env.TWILIO_WHATSAPP_NUMBER) {
+            console.log('⚠️  Twilio WhatsApp credentials not configured. Skipping WhatsApp notification.');
+            console.log('📝 Add TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_WHATSAPP_NUMBER to your .env file');
+            return { success: false, error: 'Twilio credentials not configured' };
+        }
+        
+        // Import and use Twilio
+        const twilio = require('twilio');
+        const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+        
+        // Format phone number (ensure it starts with +)
+        let formattedPhone = phoneNumber.replace(/[^0-9+]/g, '');
+        if (!formattedPhone.startsWith('+')) {
+            formattedPhone = '+' + formattedPhone;
+        }
+        
+        console.log(`📱 Sending WhatsApp message to ${formattedPhone}...`);
+        
+        const messageResult = await client.messages.create({
+            from: `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}`,
+            to: `whatsapp:${formattedPhone}`,
+            body: message
+        });
+        
+        console.log(`✅ WhatsApp message sent successfully! Message SID: ${messageResult.sid}`);
+        
+        return { success: true, messageId: messageResult.sid };
+    } catch (error) {
+        console.error('❌ WhatsApp notification failed:', error.message);
+        
+        // Provide helpful error messages
+        if (error.code === 20003) {
+            console.error('🚫 Authentication failed - check your Twilio Account SID and Auth Token');
+        } else if (error.code === 21211) {
+            console.error('📱 Invalid To phone number - check the phone number format');
+        } else if (error.code === 21212) {
+            console.error('📱 Invalid From phone number - check your Twilio WhatsApp number');
+        } else if (error.code === 21610) {
+            console.error('🚫 WhatsApp not enabled for this number or sandbox not configured');
+        }
+        
+        return { success: false, error: error.message };
     }
 };
 
@@ -357,6 +422,69 @@ const connectDB = async () => {
 // Routes
 
 // Authentication Routes
+app.post('/api/auth/register', asyncHandler(async (req, res) => {
+    const { error, value } = userRegistrationSchema.validate(req.body);
+    if (error) {
+        return res.status(400).json(handleValidationError(error));
+    }
+
+    const { name, email, password, phone, rating, birth_year } = value;
+    
+    // Check if user already exists
+    const existingUser = await db.collection('users').findOne({ email });
+    if (existingUser) {
+        return res.status(400).json({ error: 'User with this email already exists' });
+    }
+
+    // Hash password
+    const saltRounds = 12;
+    const hashedPassword = await bcrypt.hash(password, saltRounds);
+
+    // Create user
+    const user = createDocument({
+        name,
+        email,
+        password: hashedPassword,
+        phone,
+        rating,
+        birth_year,
+        role: 'user',
+        status: 'active',
+        email_verified: false
+    });
+
+    await db.collection('users').insertOne(user);
+
+    // Also create a player profile for tournament participation
+    const player = createDocument({
+        name,
+        rating,
+        title: '', // Default empty title
+        birth_year,
+        user_id: user.id // Link player to user account
+    });
+    
+    await db.collection('players').insertOne(player);
+    console.log('✅ Created player profile:', player.id, 'for user:', user.id);
+
+    // Generate JWT token
+    const token = jwt.sign(
+        { id: user.id, email, role: 'user' },
+        process.env.JWT_SECRET,
+        { expiresIn: '24h' }
+    );
+
+    // Remove password from response
+    const { password: _, ...userResponse } = user;
+
+    res.status(201).json({
+        message: 'Registration successful',
+        token,
+        user: userResponse,
+        player_id: player.id // Include player ID in response
+    });
+}));
+
 app.post('/api/auth/login', asyncHandler(async (req, res) => {
     const { error, value } = loginSchema.validate(req.body);
     if (error) {
@@ -365,25 +493,55 @@ app.post('/api/auth/login', asyncHandler(async (req, res) => {
 
     const { email, password } = value;
     
-    // Check if credentials match admin credentials
-    if (email !== process.env.ADMIN_EMAIL || password !== process.env.ADMIN_PASSWORD) {
+    // First check if it's admin credentials
+    if (email === process.env.ADMIN_EMAIL && password === process.env.ADMIN_PASSWORD) {
+        const token = jwt.sign(
+            { email, role: 'admin' },
+            process.env.JWT_SECRET,
+            { expiresIn: '24h' }
+        );
+
+        return res.json({
+            message: 'Login successful',
+            token,
+            user: {
+                email,
+                role: 'admin'
+            }
+        });
+    }
+    
+    // Check for regular user
+    const user = await db.collection('users').findOne({ email });
+    if (!user) {
         return res.status(401).json({ error: 'Invalid email or password' });
+    }
+
+    // Verify password
+    const passwordMatch = await bcrypt.compare(password, user.password);
+    if (!passwordMatch) {
+        return res.status(401).json({ error: 'Invalid email or password' });
+    }
+
+    // Check if user is active
+    if (user.status !== 'active') {
+        return res.status(401).json({ error: 'Account is not active' });
     }
 
     // Generate JWT token
     const token = jwt.sign(
-        { email, role: 'admin' },
+        { id: user.id, email, role: user.role },
         process.env.JWT_SECRET,
         { expiresIn: '24h' }
     );
 
+    // Remove password from response
+    const { password: _, ...userResponse } = user;
+
     res.json({
         message: 'Login successful',
         token,
-        user: {
-            email,
-            role: 'admin'
-        }
+        user: userResponse
     });
 }));
 
@@ -1573,6 +1731,215 @@ app.post('/api/tournaments/:tournament_id/registrations/bulk-action', authentica
     res.json({ 
         message: `${action} action completed`,
         modified_count: result.modifiedCount
+    });
+}));
+
+// Tournament Request Management Routes
+app.get('/api/tournament-requests', authenticateToken, asyncHandler(async (req, res) => {
+    // Admin only endpoint
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Admin access required' });
+    }
+    
+    const { status = 'pending', tournament_id } = req.query;
+    
+    const matchQuery = { status };
+    if (tournament_id) {
+        matchQuery.tournament_id = tournament_id;
+    }
+    
+    const requests = await db.collection('tournament_requests').aggregate([
+        { $match: matchQuery },
+        {
+            $lookup: {
+                from: 'players',
+                localField: 'player_id',
+                foreignField: 'id',
+                as: 'player'
+            }
+        },
+        { $unwind: '$player' },
+        {
+            $lookup: {
+                from: 'tournaments',
+                localField: 'tournament_id',
+                foreignField: 'id',
+                as: 'tournament'
+            }
+        },
+        { $unwind: '$tournament' },
+        {
+            $lookup: {
+                from: 'users',
+                localField: 'user_id',
+                foreignField: 'id',
+                as: 'user'
+            }
+        },
+        { $unwind: '$user' },
+        { $sort: { request_date: -1 } }
+    ]).toArray();
+    
+    res.json(requests);
+}));
+
+app.put('/api/tournament-requests/:request_id', authenticateToken, asyncHandler(async (req, res) => {
+    // Admin only endpoint
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Admin access required' });
+    }
+    
+    const { request_id } = req.params;
+    const { action, admin_notes } = req.body;
+    
+    if (!['approve', 'reject'].includes(action)) {
+        return res.status(400).json({ error: 'Invalid action. Use approve or reject' });
+    }
+    
+    // Get the request
+    const request = await db.collection('tournament_requests').findOne({ id: request_id });
+    if (!request) {
+        return res.status(404).json({ error: 'Request not found' });
+    }
+    
+    if (request.status !== 'pending') {
+        return res.status(400).json({ error: 'Request has already been processed' });
+    }
+    
+    const updateData = {
+        status: action === 'approve' ? 'approved' : 'rejected',
+        approved_by: req.user.id,
+        approved_date: new Date().toISOString()
+    };
+    
+    if (admin_notes) {
+        updateData.admin_notes = admin_notes;
+    }
+    
+    // Update request status
+    await db.collection('tournament_requests').updateOne(
+        { id: request_id },
+        { $set: updateData }
+    );
+    
+    // Get request details with user, player and tournament info for notifications
+    const requestWithDetails = await db.collection('tournament_requests').aggregate([
+        { $match: { id: request_id } },
+        {
+            $lookup: {
+                from: 'players',
+                localField: 'player_id',
+                foreignField: 'id',
+                as: 'player'
+            }
+        },
+        { $unwind: '$player' },
+        {
+            $lookup: {
+                from: 'tournaments',
+                localField: 'tournament_id',
+                foreignField: 'id',
+                as: 'tournament'
+            }
+        },
+        { $unwind: '$tournament' },
+        {
+            $lookup: {
+                from: 'users',
+                localField: 'user_id',
+                foreignField: 'id',
+                as: 'user'
+            }
+        },
+        { $unwind: '$user' }
+    ]).toArray();
+    
+    const requestDetails = requestWithDetails[0];
+    
+    // Send WhatsApp notification
+    if (action === 'approve') {
+        const whatsappMessage = `🎉 Great news, ${requestDetails.user.name}!\n\nYour tournament registration request has been APPROVED!\n\n🏆 Tournament: ${requestDetails.tournament.name}\n📍 Location: ${requestDetails.tournament.location}\n📅 Date: ${new Date(requestDetails.tournament.start_date).toLocaleDateString()}\n⏰ Time Control: ${requestDetails.tournament.time_control}\n\nYou are now officially registered. Good luck! ♟️`;
+        
+        await sendWhatsAppNotification(requestDetails.user.phone, whatsappMessage);
+    } else if (action === 'reject') {
+        const whatsappMessage = `Hello ${requestDetails.user.name},\n\nYour tournament registration request was not approved.\n\n🏆 Tournament: ${requestDetails.tournament.name}\n${admin_notes ? '\nReason: ' + admin_notes : ''}\n\nYou can contact the tournament organizers for more information.`;
+        
+        await sendWhatsAppNotification(requestDetails.user.phone, whatsappMessage);
+    }
+    
+    res.json({ 
+        message: `Request ${action}d successfully`,
+        request: requestDetails
+    });
+}));
+
+// Notification Management Routes
+app.get('/api/notifications', authenticateToken, asyncHandler(async (req, res) => {
+    const { limit = 20, read } = req.query;
+    
+    const matchQuery = { user_id: req.user.id };
+    if (read !== undefined) {
+        matchQuery.read = read === 'true';
+    }
+    
+    const notifications = await db.collection('notifications')
+        .find(matchQuery)
+        .sort({ created_date: -1 })
+        .limit(parseInt(limit))
+        .toArray();
+    
+    res.json(notifications);
+}));
+
+app.get('/api/notifications/unread-count', authenticateToken, asyncHandler(async (req, res) => {
+    const count = await db.collection('notifications').countDocuments({
+        user_id: req.user.id,
+        read: false
+    });
+    
+    res.json({ unread_count: count });
+}));
+
+app.put('/api/notifications/:notification_id/read', authenticateToken, asyncHandler(async (req, res) => {
+    const { notification_id } = req.params;
+    
+    const result = await db.collection('notifications').updateOne(
+        { id: notification_id, user_id: req.user.id },
+        { $set: { read: true, read_date: new Date().toISOString() } }
+    );
+    
+    if (result.matchedCount === 0) {
+        return res.status(404).json({ error: 'Notification not found' });
+    }
+    
+    res.json({ message: 'Notification marked as read' });
+}));
+
+app.put('/api/notifications/mark-all-read', authenticateToken, asyncHandler(async (req, res) => {
+    const result = await db.collection('notifications').updateMany(
+        { user_id: req.user.id, read: false },
+        { $set: { read: true, read_date: new Date().toISOString() } }
+    );
+    
+    res.json({ 
+        message: 'All notifications marked as read',
+        updated_count: result.modifiedCount
+    });
+}));
+
+// Test WhatsApp endpoint (for debugging)
+app.post('/api/test-whatsapp', authenticateToken, asyncHandler(async (req, res) => {
+    const { phoneNumber, message } = req.body;
+    
+    if (!phoneNumber || !message) {
+        return res.status(400).json({ error: 'phoneNumber and message are required' });
+    }
+    
+    const result = await sendWhatsAppNotification(phoneNumber, message);
+    
+    res.json({
+        message: 'WhatsApp test completed',
+        result: result
     });
 }));
 
