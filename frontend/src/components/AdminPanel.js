@@ -310,7 +310,10 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
             console.log('✅ Players:', playersRes.data);
             
             const participantPlayerIds = participantsRes.data.map(p => p.player_id);
-            const available = playersRes.data.filter(player => !participantPlayerIds.includes(player.id));
+            const available = playersRes.data
+                .filter(player => !participantPlayerIds.includes(player.id))
+                .map(p => ({ ...p, _linked: !!p.user_id }))
+                .sort((a, b) => (b._linked - a._linked) || (b.rating - a.rating));
             
             console.log('📋 Available players:', available.length);
             
@@ -1058,7 +1061,12 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
                                                         className="rounded border-gray-300"
                                                     />
                                                 </TableCell>
-                                                <TableCell className="font-medium">{player.name}</TableCell>
+                                                <TableCell className="font-medium flex items-center gap-2">
+                                                    {player.name}
+                                                    {player._linked && (
+                                                        <Badge variant="secondary" className="text-[10px]">Linked</Badge>
+                                                    )}
+                                                </TableCell>
                                                 <TableCell>{player.rating}</TableCell>
                                                 <TableCell>
                                                     <Button
@@ -1347,15 +1355,48 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
                 <Card>
                     <CardHeader className="flex flex-row items-center justify-between">
                         <CardTitle>Player Management</CardTitle>
-                        <Button 
-                            onClick={() => {
-                                resetPlayerForm();
-                                setIsDialogOpen(true);
-                            }}
-                        >
-                            <Plus className="h-4 w-4 mr-2" />
-                            Add Player
-                        </Button>
+                        <div className="flex items-center gap-2">
+                            <Button 
+                                variant="outline"
+                                onClick={async () => {
+                                    try {
+                                        const token = localStorage.getItem('token');
+                                        const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
+                                        const res = await axios.post(`${API}/admin/link-players-to-users`, {}, { headers: authHeaders });
+                                        showMessage(`Linked: ${res.data.linked_count}, already linked: ${res.data.already_linked}, ambiguous: ${res.data.ambiguous_count}`);
+                                        fetchAllData();
+                                    } catch (err) {
+                                        showMessage(err.response?.data?.error || 'Failed to link players', true);
+                                    }
+                                }}
+                            >
+                                Link Players to Users
+                            </Button>
+                            <Button 
+                                variant="outline"
+                                onClick={async () => {
+                                    try {
+                                        const token = localStorage.getItem('token');
+                                        const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
+                                        const res = await axios.post(`${API}/admin/cleanup-duplicates`, {}, { headers: authHeaders });
+                                        showMessage(`Cleanup done. Cleaned: ${res.data.records_cleaned}`);
+                                    } catch (err) {
+                                        showMessage(err.response?.data?.error || 'Cleanup failed', true);
+                                    }
+                                }}
+                            >
+                                Cleanup Duplicates
+                            </Button>
+                            <Button 
+                                onClick={() => {
+                                    resetPlayerForm();
+                                    setIsDialogOpen(true);
+                                }}
+                            >
+                                <Plus className="h-4 w-4 mr-2" />
+                                Add Player
+                            </Button>
+                        </div>
                     </CardHeader>
                     <CardContent>
                         <Table>

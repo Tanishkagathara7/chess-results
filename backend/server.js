@@ -958,13 +958,62 @@ app.post('/api/tournaments/:tournament_id/participants', authenticateToken, asyn
         console.log(`✅ Created new participant record for player ${player_id}`);
     }
     
+    // Attempt to notify the associated user that they were added
+    let notificationSent = false;
+    try {
+        // First, if the player is linked to a user, notify them
+        let userToNotify = null;
+        if (player.user_id) {
+            userToNotify = await db.collection('users').findOne({ id: player.user_id });
+        }
+        
+        // Otherwise, look up a recent request for this player and tournament to find a user
+        if (!userToNotify) {
+            const request = await db.collection('tournament_requests')
+                .find({ tournament_id, player_id })
+                .sort({ request_date: -1 })
+                .limit(1)
+                .toArray();
+            if (request && request[0]?.user_id) {
+                userToNotify = await db.collection('users').findOne({ id: request[0].user_id });
+            }
+        }
+        
+        if (userToNotify) {
+            const notificationData = {
+                user_id: userToNotify.id,
+                type: 'tournament_admin_added',
+                title: 'Added to Tournament',
+                message: `You have been added to the tournament "${tournament.name}".`,
+                data: {
+                    tournament_id,
+                    tournament_name: tournament.name,
+                    player_id,
+                    player_name: player.name,
+                    added_by: req.user?.id || null
+                },
+                read: false,
+                created_date: new Date().toISOString()
+            };
+            const notification = createDocument(notificationData);
+            await db.collection('notifications').insertOne(notification);
+            notificationSent = true;
+            console.log(`✅ Created admin-added notification for user:`, userToNotify.email);
+        } else {
+            console.log('ℹ️ No associated user found for player; notification not sent');
+        }
+    } catch (notifyErr) {
+        console.warn('⚠️ Failed to create admin-added notification:', notifyErr.message);
+    }
+    
     res.json({ 
         message: 'Player added to tournament successfully',
         participant: {
             ...participant,
             player_name: player.name,
             player_rating: player.rating
-        }
+        },
+        notification_sent: notificationSent
     });
 }));
 
@@ -2279,6 +2328,80 @@ app.put('/api/tournament-requests/:request_id', authenticateToken, asyncHandler(
     res.json({ 
         message: `Request ${action}d successfully`,
         request: requestDetails
+    });
+}));
+
+// Admin Utilities: Link players to users by heuristic
+app.post('/api/admin/link-players-to-users', authenticateToken, asyncHandler(async (req, res) => {
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Admin access required' });
+    }
+
+    const normalize = (s) => (s || '').toString().trim().toLowerCase();
+
+    const users = await db.collection('users').find({}).toArray();
+    const players = await db.collection('players').find({}).toArray();
+
+    let linkedCount = 0;
+    let alreadyLinked = 0;
+    const ambiguous = [];
+    const updates = [];
+
+    // Build name->players map for quick lookup
+    const nameMap = new Map();
+    for (const p of players) {
+        const key = normalize(p.name);
+        if (!nameMap.has(key)) nameMap.set(key, []);
+        nameMap.get(key).push(p);
+    }
+
+    for (const user of users) {
+        const emailLocal = normalize((user.email || '').split('@')[0]);
+        const userName = normalize(user.name);
+
+        // Skip if any player already linked to this user
+        const already = players.find(p => p.user_id === user.id);
+        if (already) {
+            alreadyLinked++;
+            continue;
+        }
+
+        // Candidate players
+        const exactMatches = nameMap.get(userName) || [];
+        const containsMatches = players.filter(p => normalize(p.name).includes(emailLocal));
+
+        let candidates = [...exactMatches];
+        for (const c of containsMatches) {
+            if (!candidates.find(x => x.id === c.id)) candidates.push(c);
+        }
+
+        // If none found, skip
+        if (candidates.length === 0) continue;
+
+        // Prefer the one with highest rating, then most recent created_at
+        candidates.sort((a, b) => (b.rating || 0) - (a.rating || 0) || new Date(b.created_at || 0) - new Date(a.created_at || 0));
+
+        // If multiple candidates with different ids and same name, mark ambiguous but still pick the first
+        if (candidates.length > 1) {
+            ambiguous.push({ user_email: user.email, user_name: user.name, candidate_ids: candidates.map(c => c.id), candidate_names: candidates.map(c => c.name) });
+        }
+
+        const chosen = candidates[0];
+        updates.push({ player_id: chosen.id, user_id: user.id });
+    }
+
+    // Apply updates
+    for (const upd of updates) {
+        await db.collection('players').updateOne({ id: upd.player_id }, { $set: { user_id: upd.user_id } });
+        linkedCount++;
+    }
+
+    res.json({
+        message: 'Linking complete',
+        linked_count: linkedCount,
+        already_linked: alreadyLinked,
+        ambiguous_count: ambiguous.length,
+        ambiguous_samples: ambiguous.slice(0, 10)
     });
 }));
 

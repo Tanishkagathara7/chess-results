@@ -1,6 +1,6 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Trophy, Users, Globe, Calendar, Award, Target } from 'lucide-react';
+import { Trophy, Users, Globe, Calendar, Award, Target, PlayCircle, Shield, Star } from 'lucide-react';
 import { Button } from './ui/button';
 import { Card, CardContent } from './ui/card';
 
@@ -14,16 +14,26 @@ const LandingPage = () => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-indigo-50">
       {/* Header */}
-      <header className="bg-white/90 backdrop-blur-sm border-b border-gray-200 sticky top-0 z-50">
+      <header className="bg-white/80 backdrop-blur-md border-b border-gray-200 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center space-x-2">
               <Trophy className="h-8 w-8 text-blue-600" />
               <span className="text-xl font-bold text-gray-900">ChessTournaments</span>
             </div>
-            <Button onClick={handleGetStarted} className="bg-blue-600 hover:bg-blue-700">
-              Get Started
-            </Button>
+            <nav className="hidden md:flex items-center space-x-8">
+              <a href="#features" className="text-gray-600 hover:text-blue-600 font-medium">Features</a>
+              <a href="#stats" className="text-gray-600 hover:text-blue-600 font-medium">Stats</a>
+              <a href="#cta" className="text-gray-600 hover:text-blue-600 font-medium">Get Started</a>
+            </nav>
+            <div className="flex items-center gap-3">
+              <Button onClick={() => navigate('/auth')} variant="outline" className="hidden sm:inline-flex">
+                Sign In
+              </Button>
+              <Button onClick={handleGetStarted} className="bg-blue-600 hover:bg-blue-700">
+                Create Account
+              </Button>
+            </div>
           </div>
         </div>
       </header>
@@ -40,34 +50,69 @@ const LandingPage = () => {
                 </div>
               </div>
             </div>
-            
-            <h1 className="text-4xl md:text-6xl font-bold text-gray-900 mb-6">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 text-blue-700 text-sm font-medium mb-4">
+              <Star className="h-4 w-4" />
+              New: Swiss pairings, requests, and final standings
+            </div>
+
+            <h1 className="text-4xl md:text-6xl font-extrabold tracking-tight text-gray-900 mb-6">
               Welcome to
-              <span className="block text-blue-600">ChessTournaments</span>
+              <span className="block text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600">ChessTournaments</span>
             </h1>
             
-            <p className="text-xl md:text-2xl text-gray-600 mb-8 max-w-3xl mx-auto">
-              Your ultimate platform for managing chess tournaments, tracking players, 
-              and organizing competitive chess events with ease.
+            <p className="text-xl md:text-2xl text-gray-600 mb-10 max-w-3xl mx-auto">
+              Manage tournaments, track players, and deliver beautiful results with a modern, fast UI.
             </p>
             
-            <div className="flex flex-col sm:flex-row gap-4 justify-center items-center mb-12">
+            <div className="flex flex-col sm:flex-row gap-4 justify-center items-center mb-14">
               <Button 
                 onClick={handleGetStarted}
                 className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 text-lg font-semibold rounded-lg shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200"
               >
                 Get Started Today
               </Button>
+              <Button
+                onClick={() => navigate('/auth')}
+                variant="outline"
+                className="px-6 py-4 text-lg rounded-lg border-blue-200 hover:bg-blue-50"
+              >
+                <PlayCircle className="h-5 w-5 mr-2" />
+                Watch Demo
+              </Button>
               <p className="text-sm text-gray-500">
-                Join thousands of chess enthusiasts worldwide
+                Trusted by clubs and organizers worldwide
               </p>
             </div>
           </div>
         </div>
       </section>
 
+      {/* Stats Section */}
+      <section id="stats" className="py-12">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+            <div className="rounded-xl bg-white shadow-sm border border-gray-100 p-6 text-center">
+              <div className="text-3xl font-extrabold text-gray-900">1,200+</div>
+              <div className="mt-1 text-sm text-gray-500">Tournaments Managed</div>
+            </div>
+            <div className="rounded-xl bg-white shadow-sm border border-gray-100 p-6 text-center">
+              <div className="text-3xl font-extrabold text-gray-900">25k</div>
+              <div className="mt-1 text-sm text-gray-500">Players Tracked</div>
+            </div>
+            <div className="rounded-xl bg-white shadow-sm border border-gray-100 p-6 text-center">
+              <div className="text-3xl font-extrabold text-gray-900">98%</div>
+              <div className="mt-1 text-sm text-gray-500">Organizer Satisfaction</div>
+            </div>
+            <div className="rounded-xl bg-white shadow-sm border border-gray-100 p-6 text-center">
+              <div className="text-3xl font-extrabold text-gray-900">Global</div>
+              <div className="mt-1 text-sm text-gray-500">Cloud Access</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* Features Section */}
-      <section className="py-20 bg-white">
+      <section id="features" className="py-20 bg-white">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-16">
             <h2 className="text-3xl md:text-4xl font-bold text-gray-900 mb-4">
@@ -155,7 +200,7 @@ const LandingPage = () => {
       </section>
 
       {/* CTA Section */}
-      <section className="py-20 bg-gradient-to-r from-blue-600 to-indigo-600">
+      <section id="cta" className="py-20 bg-gradient-to-r from-blue-600 to-indigo-600">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
           <h2 className="text-3xl md:text-4xl font-bold text-white mb-4">
             Ready to Start Your Chess Journey?

@@ -292,48 +292,56 @@ const Tournaments = () => {
 
   const checkUserRegistrations = async () => {
     if (!user || !tournaments || tournaments.length === 0) return;
-    
+
+    const normalize = (s) => (s || '').toString().trim().toLowerCase();
+    const emailLocal = normalize((user.email || '').split('@')[0]);
+
     try {
       // Search for user's player profile
       const searchResponse = await axios.get(`${API}/players`);
       let userPlayer = searchResponse.data.find(p => p.user_id === user.id);
-      
+
       if (!userPlayer) {
         // Fallback to name search for backwards compatibility
-        userPlayer = searchResponse.data.find(p => 
-          p.name.toLowerCase() === user.name.toLowerCase() || 
-          p.name.toLowerCase().includes(user.email.split('@')[0].toLowerCase())
+        userPlayer = searchResponse.data.find(p =>
+          normalize(p.name) === normalize(user.name) ||
+          normalize(p.name).includes(emailLocal)
         );
       }
-      
+
       if (!userPlayer) {
         console.log('No player profile found for user:', user.email);
-        return;
+        // We still proceed without userPlayer by matching via userId/name against participants below
       }
-      
-      console.log('✅ Checking registration status for player:', userPlayer.name, 'across', tournaments.length, 'tournaments');
-      
+
+      console.log('✅ Checking registration status across', tournaments.length, 'tournaments');
+
       // Check both registrations and requests for each tournament
       const statusChecks = tournaments.map(async (tournament) => {
         try {
           // Check if user is already registered (approved)
           const participantsResponse = await axios.get(`${API}/tournaments/${tournament.id}/participants`);
-          const isRegistered = participantsResponse.data.some(p => p.player_id === userPlayer.id);
-          
+          const participants = participantsResponse.data || [];
+
+          const isRegistered = participants.some(p => {
+            const byId = userPlayer && p.player_id === userPlayer.id;
+            const byLinkedUser = p.player?.user_id && p.player.user_id === user.id;
+            const byName = normalize(p.player?.name) === normalize(user.name) || normalize(p.player?.name).includes(emailLocal);
+            return byId || byLinkedUser || byName;
+          });
+
           if (isRegistered) {
             console.log(`🏆 User is registered for tournament: ${tournament.name}`);
             return { tournamentId: tournament.id, status: 'joined' };
           }
-          
+
           // Check if user has any request (pending or approved)
           const token = localStorage.getItem('token');
           const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
-          
+
           const requestsResponse = await axios.get(`${API}/my-requests`, { headers: authHeaders });
-          const userRequest = requestsResponse.data.find(r => 
-            r.tournament_id === tournament.id
-          );
-          
+          const userRequest = (requestsResponse.data || []).find(r => r.tournament_id === tournament.id);
+
           if (userRequest) {
             console.log(`📨 Found request for ${tournament.name}: ${userRequest.status}`);
             if (userRequest.status === 'approved') {
@@ -342,20 +350,20 @@ const Tournaments = () => {
               return { tournamentId: tournament.id, status: 'pending' };
             }
           }
-          
+
           return { tournamentId: tournament.id, status: null };
         } catch (error) {
           console.error(`❌ Error checking status for ${tournament.name}:`, error.message);
           return { tournamentId: tournament.id, status: null };
         }
       });
-      
+
       const results = await Promise.all(statusChecks);
       const newStatus = {};
       results.forEach(({ tournamentId, status }) => {
         if (status) newStatus[tournamentId] = status;
       });
-      
+
       console.log('✅ Final join status:', newStatus);
       setJoinStatus(newStatus);
     } catch (error) {
@@ -457,6 +465,12 @@ const Tournaments = () => {
         const errorMessage = error.response?.data?.error;
         if (errorMessage?.includes('already registered') || errorMessage?.includes('already approved')) {
           alert('ℹ️ You are already registered for this tournament!');
+          // Reflect the correct state in UI immediately
+          setJoinStatus(prev => ({ ...prev, [tournamentId]: 'joined' }));
+          try {
+            // Refresh statuses just in case
+            await checkUserRegistrations();
+          } catch (_) {}
         } else if (errorMessage?.includes('pending request')) {
           alert('ℹ️ You already have a pending request for this tournament!');
           setJoinStatus(prev => ({ ...prev, [tournamentId]: 'pending' }));
