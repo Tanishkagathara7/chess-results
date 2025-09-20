@@ -2415,6 +2415,12 @@ app.get('/health', (req, res) => {
     });
 });
 
+// Friendly landing page for root path
+app.get('/', (req, res) => {
+    // Redirect to API docs for convenience in hosted environments (e.g., Render)
+    res.redirect('/api-docs');
+});
+
 // 404 handler
 app.use('*', (req, res) => {
     res.status(404).json({ error: 'Route not found' });
