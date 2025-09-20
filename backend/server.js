@@ -2152,6 +2152,81 @@ app.get('/api/my-requests', authenticateToken, asyncHandler(async (req, res) => 
     res.json(requests);
 }));
 
+// Profile summary for the authenticated user: tournaments and game history
+app.get('/api/my-summary', authenticateToken, asyncHandler(async (req, res) => {
+    // Find all player profiles linked to this user
+    const players = await db.collection('players').find({ user_id: req.user.id }).toArray();
+    const playerIds = players.map(p => p.id);
+
+    // If no linked players, try to infer from recent requests
+    if (playerIds.length === 0) {
+        const recentReq = await db.collection('tournament_requests')
+            .find({ user_id: req.user.id })
+            .sort({ request_date: -1 })
+            .limit(1)
+            .toArray();
+        if (recentReq[0]?.player_id) {
+            playerIds.push(recentReq[0].player_id);
+        }
+    }
+
+    // Tournaments participated (active or previously registered)
+    const tournaments = await db.collection('tournament_participants').aggregate([
+        { $match: { player_id: { $in: playerIds }, status: { $ne: 'withdrawn' } } },
+        {
+            $lookup: {
+                from: 'tournaments',
+                localField: 'tournament_id',
+                foreignField: 'id',
+                as: 'tournament'
+            }
+        },
+        { $unwind: '$tournament' },
+        { $sort: { registration_date: -1 } }
+    ]).toArray();
+
+    // Games (pairings) involving any of the player's IDs
+    const gamesRaw = await db.collection('pairings').find({
+        $or: [
+            { white_player_id: { $in: playerIds } },
+            { black_player_id: { $in: playerIds } }
+        ]
+    }).sort({ tournament_id: 1, round: 1, board_number: 1 }).toArray();
+
+    // Build normalized game view
+    const games = gamesRaw.map(p => {
+        const youAreWhite = playerIds.includes(p.white_player_id);
+        const opponent = youAreWhite ? (p.black_player || null) : (p.white_player || null);
+        let outcome = 'pending';
+        if (p.result) {
+            if (p.result === '1/2-1/2') outcome = 'draw';
+            else if (youAreWhite) outcome = (p.result === '1-0') ? 'win' : 'loss';
+            else outcome = (p.result === '0-1') ? 'win' : 'loss';
+        }
+        return {
+            id: p.id,
+            tournament_id: p.tournament_id,
+            round: p.round,
+            you_color: youAreWhite ? 'white' : 'black',
+            opponent: opponent ? { id: opponent.id, name: opponent.name, rating: opponent.rating || 0 } : null,
+            result: p.result || null,
+            outcome,
+            updated_at: p.updated_at || p.created_at || null
+        };
+    });
+
+    // Totals
+    const totals = {
+        tournaments: tournaments.length,
+        games: games.length,
+        wins: games.filter(g => g.outcome === 'win').length,
+        draws: games.filter(g => g.outcome === 'draw').length,
+        losses: games.filter(g => g.outcome === 'loss').length
+    };
+
+    res.json({ players, tournaments, games, totals });
+}));
+
 app.get('/api/tournament-requests', authenticateToken, asyncHandler(async (req, res) => {
     // Admin only endpoint
     if (req.user.role !== 'admin') {

@@ -1,8 +1,9 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Trophy, Users, Globe, Calendar, Award, Target, PlayCircle, Shield, Star } from 'lucide-react';
+import { Trophy, Users, Globe, Calendar, Award, Target } from 'lucide-react';
 import { Button } from './ui/button';
 import { Card, CardContent } from './ui/card';
+import backgroundImg from '../img/background.jpeg';
 
 const LandingPage = () => {
   const navigate = useNavigate();
@@ -12,100 +13,65 @@ const LandingPage = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-indigo-50">
+    <div className="relative min-h-screen bg-gradient-to-br from-blue-50 via-white to-indigo-50">
       {/* Header */}
-      <header className="bg-white/80 backdrop-blur-md border-b border-gray-200 sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
+      <header className="sticky top-0 z-50 bg-gradient-to-b from-amber-200/95 via-amber-100/95 to-amber-50/95 backdrop-blur-md border-b-2 border-amber-400/70 shadow-md">
+        <div className="w-full px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-16">
+            {/* Left: Logo */}
             <div className="flex items-center space-x-2">
-              <Trophy className="h-8 w-8 text-blue-600" />
+              <Trophy className="h-8 w-8 text-amber-500" />
               <span className="text-xl font-bold text-gray-900">ChessTournaments</span>
             </div>
-            <nav className="hidden md:flex items-center space-x-8">
-              <a href="#features" className="text-gray-600 hover:text-blue-600 font-medium">Features</a>
-              <a href="#stats" className="text-gray-600 hover:text-blue-600 font-medium">Stats</a>
-              <a href="#cta" className="text-gray-600 hover:text-blue-600 font-medium">Get Started</a>
-            </nav>
+            {/* Right: Auth actions */}
             <div className="flex items-center gap-3">
-              <Button onClick={() => navigate('/auth')} variant="outline" className="hidden sm:inline-flex">
+              <Button onClick={() => navigate('/auth')} variant="outline" className="hidden sm:inline-flex border-amber-500 text-amber-800 hover:bg-amber-100">
                 Sign In
               </Button>
-              <Button onClick={handleGetStarted} className="bg-blue-600 hover:bg-blue-700">
+              <Button onClick={handleGetStarted} className="bg-amber-600 hover:bg-amber-700">
                 Create Account
               </Button>
             </div>
           </div>
         </div>
       </header>
-
       {/* Hero Section */}
-      <section className="relative overflow-hidden py-20">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center">
-            <div className="flex justify-center mb-8">
-              <div className="relative">
-                <Trophy className="h-24 w-24 text-blue-600" />
-                <div className="absolute -top-2 -right-2 h-8 w-8 bg-yellow-400 rounded-full flex items-center justify-center">
-                  <Award className="h-4 w-4 text-yellow-800" />
+      <section className="relative overflow-hidden py-24 md:py-28">
+        {/* Background image with overlay and bottom fade */}
+        <div className="absolute inset-0">
+          <img src={backgroundImg} alt="" className="w-full h-full object-cover" />
+          <div className="absolute inset-0 bg-black/45" />
+          <div className="absolute inset-x-0 bottom-0 h-28 md:h-36 bg-gradient-to-b from-transparent to-white" />
+        </div>
+        <div className="relative">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="text-center">
+              <div className="flex justify-center mb-8">
+                <div className="relative">
+                  <Trophy className="h-24 w-24 text-amber-300 drop-shadow" />
+                  <div className="absolute -top-2 -right-2 h-8 w-8 bg-yellow-400/90 rounded-full flex items-center justify-center shadow">
+                    <Award className="h-4 w-4 text-yellow-900" />
+                  </div>
                 </div>
               </div>
-            </div>
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 text-blue-700 text-sm font-medium mb-4">
-              <Star className="h-4 w-4" />
-              New: Swiss pairings, requests, and final standings
-            </div>
-
-            <h1 className="text-4xl md:text-6xl font-extrabold tracking-tight text-gray-900 mb-6">
-              Welcome to
-              <span className="block text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600">ChessTournaments</span>
-            </h1>
-            
-            <p className="text-xl md:text-2xl text-gray-600 mb-10 max-w-3xl mx-auto">
-              Manage tournaments, track players, and deliver beautiful results with a modern, fast UI.
-            </p>
-            
-            <div className="flex flex-col sm:flex-row gap-4 justify-center items-center mb-14">
-              <Button 
-                onClick={handleGetStarted}
-                className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 text-lg font-semibold rounded-lg shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200"
-              >
-                Get Started Today
-              </Button>
-              <Button
-                onClick={() => navigate('/auth')}
-                variant="outline"
-                className="px-6 py-4 text-lg rounded-lg border-blue-200 hover:bg-blue-50"
-              >
-                <PlayCircle className="h-5 w-5 mr-2" />
-                Watch Demo
-              </Button>
-              <p className="text-sm text-gray-500">
-                Trusted by clubs and organizers worldwide
+              <h1 className="text-4xl md:text-6xl font-extrabold tracking-tight text-white mb-6 drop-shadow">
+                Welcome to
+                <span className="block text-transparent bg-clip-text bg-gradient-to-r from-amber-200 to-yellow-200">ChessTournaments</span>
+              </h1>
+              <p className="text-xl md:text-2xl text-amber-100 mb-10 max-w-3xl mx-auto">
+                Manage tournaments, track players, and deliver beautiful results with a modern, fast UI.
               </p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Stats Section */}
-      <section id="stats" className="py-12">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-            <div className="rounded-xl bg-white shadow-sm border border-gray-100 p-6 text-center">
-              <div className="text-3xl font-extrabold text-gray-900">1,200+</div>
-              <div className="mt-1 text-sm text-gray-500">Tournaments Managed</div>
-            </div>
-            <div className="rounded-xl bg-white shadow-sm border border-gray-100 p-6 text-center">
-              <div className="text-3xl font-extrabold text-gray-900">25k</div>
-              <div className="mt-1 text-sm text-gray-500">Players Tracked</div>
-            </div>
-            <div className="rounded-xl bg-white shadow-sm border border-gray-100 p-6 text-center">
-              <div className="text-3xl font-extrabold text-gray-900">98%</div>
-              <div className="mt-1 text-sm text-gray-500">Organizer Satisfaction</div>
-            </div>
-            <div className="rounded-xl bg-white shadow-sm border border-gray-100 p-6 text-center">
-              <div className="text-3xl font-extrabold text-gray-900">Global</div>
-              <div className="mt-1 text-sm text-gray-500">Cloud Access</div>
+              <div className="flex flex-col sm:flex-row gap-4 justify-center items-center mb-14">
+                <Button 
+                  onClick={handleGetStarted}
+                  className="bg-amber-600 hover:bg-amber-700 text-white px-8 py-4 text-lg font-semibold rounded-lg shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200"
+                >
+                  Get Started Today
+                </Button>
+                <p className="text-sm text-amber-200">
+                  Trusted by clubs and organizers worldwide
+                </p>
+              </div>
             </div>
           </div>
         </div>
@@ -200,7 +166,7 @@ const LandingPage = () => {
       </section>
 
       {/* CTA Section */}
-      <section id="cta" className="py-20 bg-gradient-to-r from-blue-600 to-indigo-600">
+      <section id="cta" className="py-20 bg-gradient-to-r from-amber-600 to-orange-600">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
           <h2 className="text-3xl md:text-4xl font-bold text-white mb-4">
             Ready to Start Your Chess Journey?
@@ -210,7 +176,7 @@ const LandingPage = () => {
           </p>
           <Button 
             onClick={handleGetStarted}
-            className="bg-white text-blue-600 hover:bg-gray-100 px-8 py-4 text-lg font-semibold rounded-lg shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200"
+            className="bg-white text-amber-700 hover:bg-amber-50 px-8 py-4 text-lg font-semibold rounded-lg shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200"
           >
             Get Started Now
           </Button>
@@ -222,7 +188,7 @@ const LandingPage = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center">
             <div className="flex justify-center items-center space-x-2 mb-4">
-              <Trophy className="h-6 w-6 text-blue-400" />
+              <Trophy className="h-6 w-6 text-amber-400" />
               <span className="text-lg font-semibold">ChessTournaments</span>
             </div>
             <p className="text-gray-400">

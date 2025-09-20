@@ -6,6 +6,7 @@ import { Input } from './ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Label } from './ui/label';
 import { useAuth } from '../contexts/AuthContext';
+import backgroundImg from '../img/background.jpeg';
 
 const AuthPage = () => {
   const navigate = useNavigate();
@@ -127,29 +128,34 @@ const AuthPage = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-indigo-50 flex items-center justify-center p-4">
+    <div className="relative min-h-screen flex items-center justify-center py-10 px-4">
+      <div className="absolute inset-0">
+        <img src={backgroundImg} alt="" className="w-full h-full object-cover" />
+        <div className="absolute inset-0 bg-black/50" />
+        <div className="absolute inset-x-0 bottom-0 h-28 md:h-36 bg-gradient-to-b from-transparent to-white" />
+      </div>
       {/* Back button */}
       <Button
         variant="ghost"
         onClick={() => navigate('/')}
-        className="absolute top-4 left-4 text-gray-600 hover:text-gray-900"
+        className="absolute top-4 left-4 text-amber-100 hover:text-amber-200"
       >
         <ArrowLeft className="h-4 w-4 mr-2" />
         Back to Home
       </Button>
 
-      <div className={`w-full ${isLogin ? 'max-w-md' : 'max-w-lg'}`}>
+      <div className={`relative w-full ${isLogin ? 'max-w-md' : 'max-w-lg'}`}>
         {/* Header */}
         <div className="text-center mb-8">
           <div className="flex justify-center mb-4">
-            <div className="p-3 bg-blue-100 rounded-full">
-              <Trophy className="h-8 w-8 text-blue-600" />
+            <div className="p-3 bg-amber-100/20 rounded-full border border-amber-400/30">
+              <Trophy className="h-8 w-8 text-amber-300" />
             </div>
           </div>
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">
+          <h1 className="text-3xl font-bold text-white drop-shadow mb-2">
             {isLogin ? 'Welcome Back' : 'Create Account'}
           </h1>
-          <p className="text-gray-600">
+          <p className="text-amber-100">
             {isLogin 
               ? 'Sign in to access your chess tournaments' 
               : 'Join thousands of chess enthusiasts worldwide'
@@ -284,7 +290,7 @@ const AuthPage = () => {
                     <button
                       type="button"
                       onClick={() => navigate('/forgot-password')}
-                      className="text-sm text-blue-600 hover:text-blue-700 hover:underline"
+                      className="text-sm text-amber-600 hover:text-amber-700 hover:underline"
                     >
                       Forgot password?
                     </button>
@@ -322,7 +328,7 @@ const AuthPage = () => {
               {/* Submit button */}
               <Button
                 type="submit"
-                className="w-full bg-blue-600 hover:bg-blue-700"
+                className="w-full bg-amber-600 hover:bg-amber-700"
                 disabled={loading}
               >
                 {loading ? (
@@ -355,7 +361,7 @@ const AuthPage = () => {
                       phone: ''
                     });
                   }}
-                  className="ml-1 font-semibold text-blue-600 hover:text-blue-800"
+                  className="ml-1 font-semibold text-amber-700 hover:text-amber-800"
                 >
                   {isLogin ? 'Sign Up' : 'Sign In'}
                 </button>
