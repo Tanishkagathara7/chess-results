@@ -1,0 +1,15 @@
+{
+    "keep": {
+        "days": true,
+        "amount": 30
+    },
+    "auditLog": "D:\\chess-results\\backend\\logs\\.29d389e7c40cb609aadd1b6907ff892c5612b911-audit.json",
+    "files": [
+        {
+            "date": 1758310463621,
+            "name": "D:\\chess-results\\backend\\logs\\error-2025-09-20.log",
+            "hash": "a0f4d79332815cc4a7fa733c6c7d307aa3d9264358b02c190f4574c3f548e7cb"
+        }
+    ],
+    "hashType": "sha256"
+}

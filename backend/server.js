@@ -7,8 +7,14 @@ const { v4: uuidv4 } = require('uuid');
 const Joi = require('joi');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-const googleFormsService = require('./googleFormsService');
+// const googleFormsService = require('./googleFormsService'); // Removed - not needed
+const logger = require('./utils/logger');
+const { swaggerUi, specs } = require('./config/swagger');
+const cache = require('./utils/cache');
+const { generatePairings } = require('./utils/pairing');
+const compression = require('compression');
 require('dotenv').config();
+const mailer = require('./utils/mailer');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -19,8 +25,41 @@ const mongoUrl = process.env.MONGO_URL || 'mongodb://localhost:27017';
 const dbName = process.env.DB_NAME || 'test_database';
 
 // Middleware
-app.use(helmet());
-app.use(morgan('combined'));
+app.use(helmet({
+    crossOriginEmbedderPolicy: false,
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'", "'unsafe-inline'"],
+            styleSrc: ["'self'", "'unsafe-inline'"],
+            imgSrc: ["'self'", "data:", "https:"],
+        },
+    },
+}));
+
+// Enable compression
+app.use(compression());
+
+// Performance and security headers
+app.use((req, res, next) => {
+    // Cache control for static assets
+    if (req.url.match(/\.(js|css|jpg|jpeg|png|gif|ico|svg)$/)) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000'); // 1 year
+    }
+    
+    // Performance headers
+    res.setHeader('X-DNS-Prefetch-Control', 'on');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    
+    next();
+});
+
+// HTTP request logging with Winston
+app.use(morgan('combined', {
+    stream: { write: (message) => logger.http(message.trim()) }
+}));
+
 app.use(cors({
     origin: process.env.CORS_ORIGINS || '*',
     credentials: true
@@ -85,12 +124,11 @@ const tournamentCreateSchema = Joi.object({
     const today = new Date();
     today.setHours(0, 0, 0, 0); // Set to start of today
     
-    // Check if start date is not too far in the past (allow 1 day grace period for editing)
-    const oneDayAgo = new Date(today);
-    oneDayAgo.setDate(oneDayAgo.getDate() - 1);
-    
-    if (new Date(start_date) < oneDayAgo) {
-        return helpers.message('Start date cannot be more than 1 day in the past');
+    // Enforce start date is today or in the future (no past dates)
+    const startDateOnly = new Date(start_date);
+    startDateOnly.setHours(0, 0, 0, 0);
+    if (startDateOnly < today) {
+        return helpers.message('Start date cannot be in the past. Use today or a future date.');
     }
     
     // Check if dates are reasonable (not more than 2 years in the future)
@@ -195,6 +233,16 @@ const userRegistrationSchema = Joi.object({
     birth_year: Joi.number().integer().min(1900).max(new Date().getFullYear()).optional()
 });
 
+// Forgot/Reset Password Schemas
+const forgotPasswordRequestSchema = Joi.object({
+    email: Joi.string().email().required()
+});
+
+const resetPasswordSchema = Joi.object({
+    token: Joi.string().required(),
+    password: Joi.string().min(6).required()
+});
+
 const tournamentParticipantSchema = Joi.object({
     tournament_id: Joi.string().required(),
     player_id: Joi.string().required(),
@@ -229,88 +277,7 @@ const createDocument = (data, schema = null) => {
     return document;
 };
 
-// Generate Google Form URL for tournament registration
-const generateRegistrationFormURL = async (tournament) => {
-    try {
-        return await googleFormsService.createTournamentRegistrationForm(tournament);
-    } catch (error) {
-        console.error('❌ Error generating registration form:', error.message);
-        // Fallback to template URL
-        const formTitle = encodeURIComponent(`${tournament.name} - Registration`);
-        const formDescription = encodeURIComponent(
-            `Register for ${tournament.name}\n\n` +
-            `Location: ${tournament.location}\n` +
-            `Date: ${new Date(tournament.start_date).toLocaleDateString()} - ${new Date(tournament.end_date).toLocaleDateString()}\n` +
-            `Rounds: ${tournament.rounds}\n` +
-            `Time Control: ${tournament.time_control}\n` +
-            `Arbiter: ${tournament.arbiter}\n\n` +
-            `${tournament.registration_instructions || 'Please fill out all required fields to register for this tournament.'}`
-        );
-        
-        return {
-            enabled: true,
-            template_url: `https://docs.google.com/forms/create?title=${formTitle}&description=${formDescription}`,
-            form_id: null,
-            registration_url: null,
-            webhook_url: `${process.env.BACKEND_URL || 'http://localhost:3001'}/api/tournaments/${tournament.id}/register-webhook`,
-            instructions: 'Use the template URL to create a Google Form, then update the tournament with the actual form URL'
-        };
-    }
-};
 
-// WhatsApp notification helper
-const sendWhatsAppNotification = async (phoneNumber, message) => {
-    try {
-        // Always log for debugging
-        console.log(`📱 WhatsApp notification to ${phoneNumber}:`);
-        console.log(message);
-        console.log('---');
-        
-        // Check if Twilio credentials are configured
-        if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN || !process.env.TWILIO_WHATSAPP_NUMBER) {
-            console.log('⚠️  Twilio WhatsApp credentials not configured. Skipping WhatsApp notification.');
-            console.log('📝 Add TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_WHATSAPP_NUMBER to your .env file');
-            return { success: false, error: 'Twilio credentials not configured' };
-        }
-        
-        // Import and use Twilio
-        const twilio = require('twilio');
-        const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-        
-        // Format phone number (ensure it starts with +)
-        let formattedPhone = phoneNumber.replace(/[^0-9+]/g, '');
-        if (!formattedPhone.startsWith('+')) {
-            formattedPhone = '+' + formattedPhone;
-        }
-        
-        console.log(`📱 Sending WhatsApp message to ${formattedPhone}...`);
-        
-        const messageResult = await client.messages.create({
-            from: `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}`,
-            to: `whatsapp:${formattedPhone}`,
-            body: message
-        });
-        
-        console.log(`✅ WhatsApp message sent successfully! Message SID: ${messageResult.sid}`);
-        
-        return { success: true, messageId: messageResult.sid };
-    } catch (error) {
-        console.error('❌ WhatsApp notification failed:', error.message);
-        
-        // Provide helpful error messages
-        if (error.code === 20003) {
-            console.error('🚫 Authentication failed - check your Twilio Account SID and Auth Token');
-        } else if (error.code === 21211) {
-            console.error('📱 Invalid To phone number - check the phone number format');
-        } else if (error.code === 21212) {
-            console.error('📱 Invalid From phone number - check your Twilio WhatsApp number');
-        } else if (error.code === 21610) {
-            console.error('🚫 WhatsApp not enabled for this number or sandbox not configured');
-        }
-        
-        return { success: false, error: error.message };
-    }
-};
 
 // Validate knockout tournament logic
 const validateKnockoutLogic = (tournament, participantCount) => {
@@ -412,16 +379,92 @@ const connectDB = async () => {
         const client = new MongoClient(mongoUrl);
         await client.connect();
         db = client.db(dbName);
-        console.log(`✅ Connected to MongoDB: ${dbName}`);
+        logger.info(`Connected to MongoDB: ${dbName}`);
     } catch (error) {
-        console.error('❌ MongoDB connection error:', error);
+        logger.error('MongoDB connection error:', error);
         process.exit(1);
     }
 };
 
+// API Documentation
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs, {
+    customCss: '.swagger-ui .topbar { display: none }',
+    customSiteTitle: 'Chess Results API Documentation'
+}));
+
 // Routes
 
+/**
+ * @swagger
+ * /health:
+ *   get:
+ *     summary: Health check endpoint
+ *     tags: [Health]
+ *     responses:
+ *       200:
+ *         description: Service is healthy
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/HealthCheck'
+ */
+
 // Authentication Routes
+
+/**
+ * @swagger
+ * /api/auth/register:
+ *   post:
+ *     summary: Register a new user
+ *     tags: [Authentication]
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - name
+ *               - email
+ *               - password
+ *               - phone
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 minLength: 2
+ *                 maxLength: 50
+ *               email:
+ *                 type: string
+ *                 format: email
+ *               password:
+ *                 type: string
+ *                 minLength: 6
+ *               phone:
+ *                 type: string
+ *                 pattern: '^\\+?[1-9]\\d{1,14}$'
+ *               rating:
+ *                 type: integer
+ *                 minimum: 0
+ *                 maximum: 3000
+ *                 default: 0
+ *               birth_year:
+ *                 type: integer
+ *                 minimum: 1900
+ *     responses:
+ *       201:
+ *         description: User registered successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/AuthResponse'
+ *       400:
+ *         description: Invalid input data
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
 app.post('/api/auth/register', asyncHandler(async (req, res) => {
     const { error, value } = userRegistrationSchema.validate(req.body);
     if (error) {
@@ -545,6 +588,126 @@ app.post('/api/auth/login', asyncHandler(async (req, res) => {
     });
 }));
 
+/**
+ * @swagger
+ * /api/auth/forgot-password:
+ *   post:
+ *     summary: Request a password reset link
+ *     tags: [Authentication]
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - email
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 format: email
+ *     responses:
+ *       200:
+ *         description: If an account exists, a reset instruction will be sent
+ *       400:
+ *         description: Invalid input data
+ */
+app.post('/api/auth/forgot-password', asyncHandler(async (req, res) => {
+    const { error, value } = forgotPasswordRequestSchema.validate(req.body);
+    if (error) {
+        return res.status(400).json(handleValidationError(error));
+    }
+
+    const { email } = value;
+    const genericResponse = { message: 'If an account with that email exists, you will receive password reset instructions shortly.' };
+
+    // Find the user; return generic response regardless of existence
+    const user = await db.collection('users').findOne({ email });
+    if (!user) {
+        return res.json(genericResponse);
+    }
+
+    const token = uuidv4();
+    const expires = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hour
+
+    await db.collection('users').updateOne(
+        { id: user.id },
+        { $set: { password_reset_token: token, password_reset_expires: expires } }
+    );
+
+    // Send email (no information leakage on failure)
+    try {
+        await mailer.sendPasswordResetEmail(email, token, { frontendUrl: process.env.FRONTEND_URL });
+    } catch (e) {
+        logger.error(`Failed to send password reset email to ${email}: ${e.message}`);
+    }
+
+    // Also log token in non-production for developer convenience
+    if (process.env.NODE_ENV !== 'production') {
+        logger.info(`Password reset token for ${email}: ${token} (expires at ${expires})`);
+    }
+
+    return res.json(genericResponse);
+}));
+
+/**
+ * @swagger
+ * /api/auth/reset-password:
+ *   post:
+ *     summary: Reset password using a valid token
+ *     tags: [Authentication]
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - token
+ *               - password
+ *             properties:
+ *               token:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *                 minLength: 6
+ *     responses:
+ *       200:
+ *         description: Password has been reset successfully
+ *       400:
+ *         description: Invalid token or input
+ */
+app.post('/api/auth/reset-password', asyncHandler(async (req, res) => {
+    const { error, value } = resetPasswordSchema.validate(req.body);
+    if (error) {
+        return res.status(400).json(handleValidationError(error));
+    }
+
+    const { token, password } = value;
+
+    // Lookup user by reset token
+    const user = await db.collection('users').findOne({ password_reset_token: token });
+    if (!user || !user.password_reset_expires || new Date(user.password_reset_expires) < new Date()) {
+        return res.status(400).json({ error: 'Invalid or expired reset token' });
+    }
+
+    // Update password
+    const saltRounds = 12;
+    const hashedPassword = await bcrypt.hash(password, saltRounds);
+
+    await db.collection('users').updateOne(
+        { id: user.id },
+        { 
+            $set: { password: hashedPassword },
+            $unset: { password_reset_token: '', password_reset_expires: '' }
+        }
+    );
+
+    return res.json({ message: 'Password has been reset successfully' });
+}));
+
 app.get('/api/auth/verify', authenticateToken, (req, res) => {
     res.json({
         valid: true,
@@ -626,20 +789,48 @@ app.post('/api/tournaments', authenticateToken, asyncHandler(async (req, res) =>
     console.log('✅ Tournament validation passed:', JSON.stringify(value, null, 2));
     const tournament = createDocument(value);
     
-    // Generate registration form URLs if registration is enabled
-    if (value.enable_registration !== false) {
-        const registrationData = await generateRegistrationFormURL(tournament);
-        tournament.registration = registrationData;
-        console.log('📋 Registration form data generated:', registrationData.registration_url || registrationData.template_url);
-    }
-    
     await db.collection('tournaments').insertOne(tournament);
     console.log('✅ Tournament created successfully:', tournament.id);
     res.json(tournament);
 }));
 
 app.get('/api/tournaments', asyncHandler(async (req, res) => {
-    const tournaments = await db.collection('tournaments').find({}).limit(1000).toArray();
+    // Use aggregation to include participant counts
+    const tournaments = await db.collection('tournaments').aggregate([
+        {
+            $lookup: {
+                from: 'tournament_participants',
+                let: { tournament_id: '$id' },
+                pipeline: [
+                    {
+                        $match: {
+                            $expr: {
+                                $and: [
+                                    { $eq: ['$tournament_id', '$$tournament_id'] },
+                                    { $not: { $in: ['$status', ['withdrawn', 'eliminated']] } }
+                                ]
+                            }
+                        }
+                    }
+                ],
+                as: 'participants'
+            }
+        },
+        {
+            $addFields: {
+                participant_count: { $size: '$participants' }
+            }
+        },
+        {
+            $project: {
+                participants: 0  // Remove the participants array, keep only the count
+            }
+        },
+        {
+            $limit: 1000
+        }
+    ]).toArray();
+    
     res.json(tournaments);
 }));
 
@@ -702,30 +893,65 @@ app.post('/api/tournaments/:tournament_id/participants', authenticateToken, asyn
         return res.status(404).json({ error: 'Player not found' });
     }
     
-    // Check if player is already registered
-    const existingParticipant = await db.collection('tournament_participants').findOne({
+    // Check if player is already registered (active record)
+    const existingActiveParticipant = await db.collection('tournament_participants').findOne({
         tournament_id,
         player_id,
         status: { $ne: 'withdrawn' }
     });
     
-    if (existingParticipant) {
+    if (existingActiveParticipant) {
         return res.status(400).json({ error: 'Player is already registered for this tournament' });
     }
     
-    const { error, value } = tournamentParticipantSchema.validate({
+    // Check for withdrawn records - we can reactivate instead of creating new
+    const withdrawnParticipant = await db.collection('tournament_participants').findOne({
         tournament_id,
         player_id,
-        registration_date: new Date().toISOString(),
-        status: 'registered'
+        status: 'withdrawn'
     });
     
-    if (error) {
-        return res.status(400).json(handleValidationError(error));
-    }
+    let participant;
     
-    const participant = createDocument(value);
-    await db.collection('tournament_participants').insertOne(participant);
+    if (withdrawnParticipant) {
+        // Reactivate existing withdrawn record instead of creating new one
+        console.log(`🔄 Reactivating withdrawn participant record for player ${player_id}`);
+        
+        await db.collection('tournament_participants').updateOne(
+            { id: withdrawnParticipant.id },
+            { 
+                $set: { 
+                    status: 'registered',
+                    registration_date: new Date().toISOString(),
+                    withdrawn_date: null,
+                    withdrawn_by: null
+                }
+            }
+        );
+        
+        participant = {
+            ...withdrawnParticipant,
+            status: 'registered',
+            registration_date: new Date().toISOString()
+        };
+    } else {
+        // Create new participant record
+        const { error, value } = tournamentParticipantSchema.validate({
+            tournament_id,
+            player_id,
+            registration_date: new Date().toISOString(),
+            status: 'registered'
+        });
+        
+        if (error) {
+            return res.status(400).json(handleValidationError(error));
+        }
+        
+        participant = createDocument(value);
+        await db.collection('tournament_participants').insertOne(participant);
+        
+        console.log(`✅ Created new participant record for player ${player_id}`);
+    }
     
     res.json({ 
         message: 'Player added to tournament successfully',
@@ -756,6 +982,31 @@ app.get('/api/tournaments/:tournament_id/participants', asyncHandler(async (req,
             }
         },
         { $unwind: '$player' },
+        // Group by player_id to remove any duplicates and keep the most recent registration
+        {
+            $group: {
+                _id: '$player_id',
+                id: { $first: '$id' },
+                tournament_id: { $first: '$tournament_id' },
+                player_id: { $first: '$player_id' },
+                registration_date: { $max: '$registration_date' }, // Keep the latest registration
+                status: { $first: '$status' },
+                player: { $first: '$player' },
+                created_at: { $first: '$created_at' }
+            }
+        },
+        {
+            $project: {
+                _id: 0,
+                id: 1,
+                tournament_id: 1,
+                player_id: 1,
+                registration_date: 1,
+                status: 1,
+                player: 1,
+                created_at: 1
+            }
+        },
         { $sort: { 'player.rating': -1 } } // Sort by rating (highest first)
     ]).toArray();
     
@@ -797,16 +1048,117 @@ app.put('/api/tournaments/:tournament_id/participants/:player_id', authenticateT
 app.delete('/api/tournaments/:tournament_id/participants/:player_id', authenticateToken, asyncHandler(async (req, res) => {
     const { tournament_id, player_id } = req.params;
     
-    const result = await db.collection('tournament_participants').updateOne(
-        { tournament_id, player_id },
-        { $set: { status: 'withdrawn', withdrawn_date: new Date().toISOString() } }
+    // First, get all participant records for this player in this tournament (there might be duplicates)
+    const participantRecords = await db.collection('tournament_participants').find({
+        tournament_id, 
+        player_id, 
+        status: { $ne: 'withdrawn' }
+    }).toArray();
+    
+    if (participantRecords.length === 0) {
+        return res.status(404).json({ error: 'Participant not found' });
+    }
+    
+    console.log(`🔍 Found ${participantRecords.length} participant record(s) for player ${player_id} in tournament ${tournament_id}`);
+    
+    // Get participant details with user, player, and tournament info for notification
+    const participantWithDetails = await db.collection('tournament_participants').aggregate([
+        { $match: { tournament_id, player_id, status: { $ne: 'withdrawn' } } },
+        {
+            $lookup: {
+                from: 'players',
+                localField: 'player_id',
+                foreignField: 'id',
+                as: 'player'
+            }
+        },
+        { $unwind: '$player' },
+        {
+            $lookup: {
+                from: 'tournaments',
+                localField: 'tournament_id',
+                foreignField: 'id',
+                as: 'tournament'
+            }
+        },
+        { $unwind: '$tournament' },
+        { $limit: 1 } // Only need one record for details
+    ]).toArray();
+    
+    const participantDetails = participantWithDetails[0];
+    
+    // Find the user associated with this player
+    // Look for users who have made tournament requests with this player_id
+    const userWithPlayer = await db.collection('tournament_requests').aggregate([
+        { $match: { player_id } },
+        {
+            $lookup: {
+                from: 'users',
+                localField: 'user_id',
+                foreignField: 'id',
+                as: 'user'
+            }
+        },
+        { $unwind: '$user' },
+        { $sort: { request_date: -1 } }, // Get most recent request
+        { $limit: 1 }
+    ]).toArray();
+    
+    // Remove ALL participant records for this player from this tournament (handles duplicates)
+    const result = await db.collection('tournament_participants').updateMany(
+        { tournament_id, player_id, status: { $ne: 'withdrawn' } },
+        { $set: { 
+            status: 'withdrawn', 
+            withdrawn_date: new Date().toISOString(),
+            withdrawn_by: req.user.id // Track who removed the player
+        } }
     );
     
     if (result.matchedCount === 0) {
         return res.status(404).json({ error: 'Participant not found' });
     }
     
-    res.json({ message: 'Player removed from tournament successfully' });
+    // Send notification to user if found
+    if (userWithPlayer.length > 0) {
+        const user = userWithPlayer[0].user;
+        
+        const notificationData = {
+            user_id: user.id,
+            type: 'tournament_removal',
+            title: 'Removed from Tournament',
+            message: `You have been removed from the tournament "${participantDetails.tournament.name}". Your player "${participantDetails.player.name}" is no longer registered for this tournament.`,
+            data: {
+                tournament_id: tournament_id,
+                tournament_name: participantDetails.tournament.name,
+                player_id: player_id,
+                player_name: participantDetails.player.name,
+                removed_by: req.user.id,
+                removed_date: new Date().toISOString()
+            },
+            read: false,
+            created_date: new Date().toISOString()
+        };
+        
+        const notification = createDocument(notificationData);
+        await db.collection('notifications').insertOne(notification);
+        
+        console.log(`✅ Created removal notification for user:`, user.email);
+        
+        res.json({ 
+            message: 'Player removed from tournament successfully',
+            notification_sent: true,
+            notified_user: user.email
+        });
+    } else {
+        // No user found for this player
+        console.log(`ℹ️ No user found for player ${participantDetails.player.name}, no notification sent`);
+        
+        res.json({ 
+            message: 'Player removed from tournament successfully',
+            notification_sent: false,
+            note: 'No associated user found for notification'
+        });
+    }
 }));
 
 // Tournament Results Routes
@@ -869,7 +1221,210 @@ app.delete('/api/results/:result_id', authenticateToken, asyncHandler(async (req
     res.json({ message: 'Result deleted successfully' });
 }));
 
-// Pairings Routes
+/**
+ * @swagger
+ * /api/tournaments/{tournament_id}/pairings/generate:
+ *   post:
+ *     summary: Generate pairings for a round following Swiss-like rules
+ *     tags: [Pairings]
+ *     parameters:
+ *       - in: path
+ *         name: tournament_id
+ *         schema:
+ *           type: string
+ *         required: true
+ *         description: Tournament ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - round
+ *             properties:
+ *               round:
+ *                 type: integer
+ *                 minimum: 1
+ *               options:
+ *                 type: object
+ *                 properties:
+ *                   randomize:
+ *                     type: boolean
+ *                     description: Randomize first-round ordering (default true)
+ *     responses:
+ *       200:
+ *         description: Generated pairings
+ *       400:
+ *         description: Validation error or pairings already exist
+ */
+app.post('/api/tournaments/:tournament_id/pairings/generate', authenticateToken, asyncHandler(async (req, res) => {
+    const { tournament_id } = req.params;
+    const { round, options } = req.body || {};
+
+    if (!round || !Number.isInteger(round) || round < 1) {
+        return res.status(400).json({ error: 'round must be a positive integer' });
+    }
+
+    // Validate tournament exists
+    const tournament = await db.collection('tournaments').findOne({ id: tournament_id });
+    if (!tournament) {
+        return res.status(404).json({ error: 'Tournament not found' });
+    }
+
+    if (round > tournament.rounds) {
+        return res.status(400).json({ error: `Round ${round} exceeds tournament rounds (${tournament.rounds})` });
+    }
+
+    // Check if pairings already exist for this round
+    const existingPairings = await db.collection('pairings').findOne({ tournament_id, round });
+    if (existingPairings) {
+        return res.status(400).json({ error: `Pairings for round ${round} already exist` });
+    }
+
+    // Fetch active participants (not withdrawn or eliminated)
+    const participants = await db.collection('tournament_participants').aggregate([
+        { $match: { tournament_id, status: { $nin: ['withdrawn', 'eliminated'] } } },
+        {
+            $lookup: {
+                from: 'players',
+                localField: 'player_id',
+                foreignField: 'id',
+                as: 'player'
+            }
+        },
+        { $unwind: '$player' }
+    ]).toArray();
+
+    if (participants.length === 0) {
+        return res.status(400).json({ error: 'No active participants to pair' });
+    }
+
+    // Build player list
+    const players = participants.map(p => ({ id: p.player_id, name: p.player.name, rating: p.player.rating }));
+
+    // Get all prior pairings (strictly before this round)
+    const priorPairings = await db.collection('pairings').find({
+        tournament_id,
+        round: { $lt: round }
+    }).sort({ round: 1, board_number: 1 }).toArray();
+
+    // Calculate points and history up to previous rounds
+    const points = new Map();
+    const history = {};
+
+    for (const p of players) {
+        points.set(p.id, 0);
+        history[p.id] = { lastColor: null, whiteCount: 0, blackCount: 0, byesCount: 0, lastOpponent: null };
+    }
+
+    // Organize pairings by round
+    const pairingsByRound = new Map();
+    for (const pr of priorPairings) {
+        if (!pairingsByRound.has(pr.round)) pairingsByRound.set(pr.round, []);
+        pairingsByRound.get(pr.round).push(pr);
+    }
+
+    const sortedRounds = Array.from(pairingsByRound.keys()).sort((a, b) => a - b);
+
+    for (const r of sortedRounds) {
+        const list = pairingsByRound.get(r) || [];
+        for (const pairing of list) {
+            const whiteId = pairing.white_player_id;
+            const blackId = pairing.black_player_id;
+            const result = pairing.result;
+
+            const ensure = (id) => {
+                if (!id) return;
+                if (!history[id]) {
+                    history[id] = { lastColor: null, whiteCount: 0, blackCount: 0, byesCount: 0, lastOpponent: null };
+                }
+                if (!points.has(id)) points.set(id, 0);
+            };
+
+            // Ensure entries exist if referenced by prior rounds
+            ensure(whiteId);
+            ensure(blackId);
+
+            // Update colors and opponents
+            if (whiteId) {
+                const hW = history[whiteId];
+                if (blackId) {
+                    hW.whiteCount = (hW.whiteCount || 0) + 1;
+                    hW.lastColor = 'W';
+                    hW.lastOpponent = blackId;
+                } else {
+                    // bye
+                    hW.byesCount = (hW.byesCount || 0) + 1;
+                    hW.lastColor = null;
+                    hW.lastOpponent = null;
+                }
+            }
+            if (blackId) {
+                const hB = history[blackId];
+                hB.blackCount = (hB.blackCount || 0) + 1;
+                hB.lastColor = 'B';
+                hB.lastOpponent = whiteId;
+            }
+
+            // Update points
+            if (whiteId && blackId) {
+                if (result === '1-0') {
+                    points.set(whiteId, (points.get(whiteId) || 0) + 1);
+                } else if (result === '0-1') {
+                    points.set(blackId, (points.get(blackId) || 0) + 1);
+                } else if (result === '1/2-1/2') {
+                    points.set(whiteId, (points.get(whiteId) || 0) + 0.5);
+                    points.set(blackId, (points.get(blackId) || 0) + 0.5);
+                }
+            } else if (whiteId && !blackId) {
+                // bye grants 1 point
+                points.set(whiteId, (points.get(whiteId) || 0) + 1);
+            }
+        }
+    }
+
+    // Generate pairings
+    const { pairings, bye_player_id } = generatePairings({ players, points, history, round, options });
+
+    // Build documents and insert
+    const playerIdsToFetch = new Set();
+    for (const pr of pairings) {
+        playerIdsToFetch.add(pr.white_player_id);
+        if (pr.black_player_id) playerIdsToFetch.add(pr.black_player_id);
+    }
+
+    const playersData = await db.collection('players').find({ id: { $in: Array.from(playerIdsToFetch) } }).toArray();
+    const pmap = playersData.reduce((acc, p) => { acc[p.id] = p; return acc; }, {});
+
+    const docs = pairings.map((p, idx) => ({
+        ...createDocument({
+            tournament_id,
+            round,
+            board_number: idx + 1,
+            white_player_id: p.white_player_id,
+            black_player_id: p.black_player_id || null,
+            white_player: pmap[p.white_player_id] || null,
+            black_player: p.black_player_id ? (pmap[p.black_player_id] || null) : null,
+            result: p.black_player_id ? null : null, // result remains null; bye is inferred by null black
+            status: 'scheduled'
+        })
+    }));
+
+    if (docs.length === 0) {
+        return res.status(400).json({ error: 'Failed to generate pairings' });
+    }
+
+    await db.collection('pairings').insertMany(docs);
+
+    res.json({
+        message: `Generated ${docs.length} pairing(s) for round ${round}`,
+        bye_player_id: bye_player_id || null,
+        pairings: docs
+    });
+}));
+
+// Manual pairings creation (existing)
 app.post('/api/tournaments/:tournament_id/pairings', authenticateToken, asyncHandler(async (req, res) => {
     const { tournament_id } = req.params;
     const { error, value } = pairingCreateSchema.validate({ ...req.body, tournament_id });
@@ -1241,7 +1796,7 @@ app.post('/api/tournaments/:tournament_id/rounds/:round/complete', authenticateT
     if (eliminationsCount > 0) {
         // Calculate current standings to determine who to eliminate
         const participants = await db.collection('tournament_participants').aggregate([
-            { $match: { tournament_id, status: { $ne: 'withdrawn' } } },
+            { $match: { tournament_id, status: { $nin: ['withdrawn', 'eliminated'] } } },
             {
                 $lookup: {
                     from: 'players',
@@ -1303,6 +1858,12 @@ app.post('/api/tournaments/:tournament_id/rounds/:round/complete', authenticateT
                 return (a.player_rating || 0) - (b.player_rating || 0);
             });
         
+        // Cap eliminations to leave at least 1 player
+        const activeCount = sortedPlayers.length;
+        if (eliminationsCount > 0) {
+            eliminationsCount = Math.min(eliminationsCount, Math.max(0, activeCount - 1));
+        }
+        
         // Eliminate the bottom performers
         const playersToEliminate = sortedPlayers.slice(0, eliminationsCount);
         
@@ -1333,18 +1894,36 @@ app.post('/api/tournaments/:tournament_id/rounds/:round/complete', authenticateT
     if (!completedRounds.includes(roundNum)) {
         completedRounds.push(roundNum);
         completedRounds.sort((a, b) => a - b);
-        
-        await db.collection('tournaments').updateOne(
-            { id: tournament_id },
-            { 
-                $set: { 
-                    completed_rounds: completedRounds,
-                    last_completed_round: roundNum,
-                    updated_at: new Date().toISOString()
-                }
-            }
-        );
     }
+
+    // Determine if tournament should end (<= 1 active participant)
+    const remainingActive = await db.collection('tournament_participants').countDocuments({
+        tournament_id,
+        status: { $nin: ['withdrawn', 'eliminated'] }
+    });
+
+    const updateSet = {
+        completed_rounds: completedRounds,
+        last_completed_round: roundNum,
+        updated_at: new Date().toISOString()
+    };
+
+    if (remainingActive <= 1) {
+        updateSet.tournament_over = true;
+        // Attempt to record winner if exactly one remains
+        if (remainingActive === 1) {
+            const winner = await db.collection('tournament_participants').findOne({
+                tournament_id,
+                status: { $nin: ['withdrawn', 'eliminated'] }
+            });
+            if (winner) updateSet.winner_player_id = winner.player_id;
+        }
+    }
+
+    await db.collection('tournaments').updateOne(
+        { id: tournament_id },
+        { $set: updateSet }
+    );
     
     console.log(`✅ Round ${round} completed successfully for tournament ${tournament_id}`);
     
@@ -1353,260 +1932,29 @@ app.post('/api/tournaments/:tournament_id/rounds/:round/complete', authenticateT
         tournament_id,
         round: roundNum,
         completed_games: roundPairings.length,
-        completed_rounds: completedRounds
+        completed_rounds: completedRounds,
+        tournament_over: !!updateSet.tournament_over,
+        remaining_active: remainingActive,
+        winner_player_id: updateSet.winner_player_id || null
     });
 }));
 
-// Tournament Registration Webhook (for Google Forms submissions)
-app.post('/api/tournaments/:tournament_id/register-webhook', asyncHandler(async (req, res) => {
-    const { tournament_id } = req.params;
-    
-    console.log('📋 Received registration webhook for tournament:', tournament_id);
-    console.log('📝 Registration data:', JSON.stringify(req.body, null, 2));
-    
-    try {
-        // Validate tournament exists
-        const tournament = await db.collection('tournaments').findOne({ id: tournament_id });
-        if (!tournament) {
-            return res.status(404).json({ error: 'Tournament not found' });
-        }
-        
-        // Extract player data from form submission
-        // Google Forms sends data in different formats, handle common ones
-        let playerData;
-        
-        if (req.body.form_response) {
-            // Typeform format
-            playerData = extractFromTypeform(req.body.form_response);
-        } else if (req.body.responses) {
-            // Google Forms format (via Zapier/integrations)
-            playerData = extractFromGoogleForm(req.body.responses);
-        } else {
-            // Direct format (when posted directly)
-            playerData = {
-                name: req.body.name || req.body['entry.name'],
-                rating: parseInt(req.body.rating || req.body['entry.rating']) || 0,
-                title: req.body.title || req.body['entry.title'] || '',
-                birth_year: parseInt(req.body.birth_year || req.body['entry.birth_year']) || null,
-                email: req.body.email || req.body['entry.email'],
-                phone: req.body.phone || req.body['entry.phone'],
-                federation: req.body.federation || req.body['entry.federation'] || '',
-                tournament_id: tournament_id
-            };
-        }
-        
-        if (!playerData.name) {
-            return res.status(400).json({ error: 'Player name is required' });
-        }
-        
-        console.log('✅ Extracted player data:', playerData);
-        
-        // Check if player already exists (by name and tournament)
-        let existingPlayer = await db.collection('players').findOne({
-            name: { $regex: new RegExp(`^${playerData.name}$`, 'i') }
-        });
-        
-        let playerId;
-        if (existingPlayer) {
-            console.log('🔄 Using existing player:', existingPlayer.name);
-            playerId = existingPlayer.id;
-            
-            // Update player info if new data is better
-            const updateData = {};
-            if (playerData.rating > existingPlayer.rating) updateData.rating = playerData.rating;
-            if (playerData.title && !existingPlayer.title) updateData.title = playerData.title;
-            if (playerData.birth_year && !existingPlayer.birth_year) updateData.birth_year = playerData.birth_year;
-            
-            if (Object.keys(updateData).length > 0) {
-                await db.collection('players').updateOne(
-                    { id: existingPlayer.id },
-                    { $set: updateData }
-                );
-                console.log('🔄 Updated player info:', updateData);
-            }
-        } else {
-            // Create new player
-            const newPlayer = createDocument({
-                name: playerData.name,
-                rating: playerData.rating,
-                title: playerData.title,
-                birth_year: playerData.birth_year
-            });
-            
-            await db.collection('players').insertOne(newPlayer);
-            playerId = newPlayer.id;
-            console.log('✅ Created new player:', newPlayer.name, playerId);
-        }
-        
-        // Check if player is already registered for this tournament
-        const existingParticipant = await db.collection('tournament_participants').findOne({
-            tournament_id,
-            player_id: playerId,
-            status: { $ne: 'withdrawn' }
-        });
-        
-        if (existingParticipant) {
-            console.log('⚠️ Player already registered for this tournament');
-            return res.json({ 
-                message: 'Player already registered',
-                player_id: playerId,
-                registration_status: 'already_registered'
-            });
-        }
-        
-        // Add player to tournament
-        const participant = createDocument({
-            tournament_id,
-            player_id: playerId,
-            registration_date: new Date().toISOString(),
-            status: 'registered',
-            registration_source: 'google_form',
-            contact_email: playerData.email,
-            contact_phone: playerData.phone,
-            federation: playerData.federation
-        });
-        
-        await db.collection('tournament_participants').insertOne(participant);
-        
-        console.log('✅ Player registered for tournament successfully');
-        
-        res.json({
-            message: 'Registration successful',
-            player_id: playerId,
-            participant_id: participant.id,
-            tournament_id,
-            registration_status: 'registered'
-        });
-        
-    } catch (error) {
-        console.error('❌ Registration webhook error:', error);
-        res.status(500).json({ error: 'Registration failed', message: error.message });
-    }
-}));
 
-// Helper functions for parsing form data
-function extractFromGoogleForm(responses) {
-    // Handle Google Forms response format
-    const data = {};
-    responses.forEach(response => {
-        const question = response.question.toLowerCase();
-        const answer = response.answer;
-        
-        if (question.includes('name')) data.name = answer;
-        else if (question.includes('rating')) data.rating = parseInt(answer) || 0;
-        else if (question.includes('title')) data.title = answer;
-        else if (question.includes('birth') || question.includes('year')) data.birth_year = parseInt(answer);
-        else if (question.includes('email')) data.email = answer;
-        else if (question.includes('phone')) data.phone = answer;
-        else if (question.includes('federation') || question.includes('country')) data.federation = answer;
-    });
-    return data;
-}
 
-function extractFromTypeform(formResponse) {
-    // Handle Typeform response format
-    const data = {};
-    if (formResponse.answers) {
-        formResponse.answers.forEach(answer => {
-            const field = answer.field.ref || answer.field.title.toLowerCase();
-            const value = answer.text || answer.number || answer.email;
-            
-            if (field.includes('name')) data.name = value;
-            else if (field.includes('rating')) data.rating = parseInt(value) || 0;
-            else if (field.includes('title')) data.title = value;
-            else if (field.includes('birth') || field.includes('year')) data.birth_year = parseInt(value);
-            else if (field.includes('email')) data.email = value;
-            else if (field.includes('phone')) data.phone = value;
-            else if (field.includes('federation') || field.includes('country')) data.federation = value;
-        });
-    }
-    return data;
-}
 
-// Generate Google Form for tournament
-app.post('/api/tournaments/:tournament_id/generate-form', authenticateToken, asyncHandler(async (req, res) => {
-    const { tournament_id } = req.params;
-    
-    const tournament = await db.collection('tournaments').findOne({ id: tournament_id });
-    if (!tournament) {
-        return res.status(404).json({ error: 'Tournament not found' });
-    }
-    
-    try {
-        // Generate new registration form
-        const registrationData = await generateRegistrationFormURL(tournament);
-        
-        // Update tournament with registration data
-        await db.collection('tournaments').updateOne(
-            { id: tournament_id },
-            { 
-                $set: { 
-                    registration: registrationData,
-                    updated_at: new Date().toISOString()
-                }
-            }
-        );
-        
-        res.json({
-            message: 'Google Form generated successfully',
-            registration: registrationData
-        });
-        
-    } catch (error) {
-        console.error('❌ Error generating form:', error);
-        res.status(500).json({ 
-            error: 'Failed to generate form', 
-            message: error.message 
-        });
-    }
-}));
 
-// Get tournament registration link
-app.get('/api/tournaments/:tournament_id/registration', asyncHandler(async (req, res) => {
-    const { tournament_id } = req.params;
-    
-    const tournament = await db.collection('tournaments').findOne({ id: tournament_id });
-    if (!tournament) {
-        return res.status(404).json({ error: 'Tournament not found' });
-    }
-    
-    if (!tournament.registration) {
-        return res.status(404).json({ error: 'Registration not enabled for this tournament' });
-    }
-    
-    res.json(tournament.registration);
-}));
 
-// Update tournament registration form URL
-app.put('/api/tournaments/:tournament_id/registration', authenticateToken, asyncHandler(async (req, res) => {
-    const { tournament_id } = req.params;
-    const { registration_url, form_id } = req.body;
-    
-    if (!registration_url) {
-        return res.status(400).json({ error: 'Registration URL is required' });
-    }
-    
-    const result = await db.collection('tournaments').updateOne(
-        { id: tournament_id },
-        { 
-            $set: { 
-                'registration.registration_url': registration_url,
-                'registration.form_id': form_id,
-                'registration.updated_at': new Date().toISOString()
-            }
-        }
-    );
-    
-    if (result.matchedCount === 0) {
-        return res.status(404).json({ error: 'Tournament not found' });
-    }
-    
-    res.json({ message: 'Registration URL updated successfully' });
-}));
 
-// Get tournament registrations and participant management
-app.get('/api/tournaments/:tournament_id/registrations', authenticateToken, asyncHandler(async (req, res) => {
-    const { tournament_id } = req.params;
+
+
+// Tournament Request Management Routes
+// Create tournament request (User endpoint)
+app.post('/api/tournament-requests', authenticateToken, asyncHandler(async (req, res) => {
+    const { tournament_id, player_id, preferred_rating, notes } = req.body;
+    
+    if (!tournament_id) {
+        return res.status(400).json({ error: 'tournament_id is required' });
+    }
     
     // Validate tournament exists
     const tournament = await db.collection('tournaments').findOne({ id: tournament_id });
@@ -1614,9 +1962,118 @@ app.get('/api/tournaments/:tournament_id/registrations', authenticateToken, asyn
         return res.status(404).json({ error: 'Tournament not found' });
     }
     
-    // Get all participants (both manually added and registered)
-    const participants = await db.collection('tournament_participants').aggregate([
-        { $match: { tournament_id } },
+    // Check if tournament has already started or ended
+    const now = new Date();
+    const tournamentStartDate = new Date(tournament.start_date);
+    const tournamentEndDate = new Date(tournament.end_date);
+    
+    if (now > tournamentEndDate) {
+        return res.status(400).json({ 
+            error: 'Registration is closed. Tournament has already ended.',
+            tournament_end_date: tournament.end_date,
+            current_time: now.toISOString()
+        });
+    }
+    
+    if (now >= tournamentStartDate) {
+        return res.status(400).json({ 
+            error: 'Registration is closed. Tournament has already started.',
+            tournament_start_date: tournament.start_date,
+            current_time: now.toISOString()
+        });
+    }
+    
+    // If no player_id provided, try to find/create player from user info
+    let finalPlayerId = player_id;
+    if (!finalPlayerId) {
+        // Look for existing player linked to this user
+        let player = await db.collection('players').findOne({ user_id: req.user.id });
+        
+        if (!player) {
+            // Create new player from user information
+            const newPlayer = createDocument({
+                name: req.user.name,
+                rating: preferred_rating || 0,
+                user_id: req.user.id
+            });
+            
+            await db.collection('players').insertOne(newPlayer);
+            player = newPlayer;
+            console.log('✅ Created new player for user:', req.user.name);
+        }
+        
+        finalPlayerId = player.id;
+    } else {
+        // Validate provided player exists
+        const player = await db.collection('players').findOne({ id: player_id });
+        if (!player) {
+            return res.status(404).json({ error: 'Player not found' });
+        }
+    }
+    
+    // Check if user already has a request for this tournament
+    const existingRequest = await db.collection('tournament_requests').findOne({
+        user_id: req.user.id,
+        tournament_id,
+        status: { $in: ['pending', 'approved'] }
+    });
+    
+    if (existingRequest) {
+        return res.status(400).json({ 
+            error: 'You already have a request for this tournament',
+            status: existingRequest.status
+        });
+    }
+    
+    // Check if player is already registered as participant
+    const existingParticipant = await db.collection('tournament_participants').findOne({
+        tournament_id,
+        player_id: finalPlayerId,
+        status: { $ne: 'withdrawn' }
+    });
+    
+    if (existingParticipant) {
+        return res.status(400).json({ error: 'Player is already registered for this tournament' });
+    }
+    
+    // Create the tournament request
+    const request = createDocument({
+        tournament_id,
+        player_id: finalPlayerId,
+        user_id: req.user.id,
+        status: 'pending',
+        request_date: new Date().toISOString(),
+        preferred_rating: preferred_rating || 0,
+        notes: notes || ''
+    });
+    
+    await db.collection('tournament_requests').insertOne(request);
+    
+    console.log('✅ Tournament request created:', {
+        user: req.user.name,
+        tournament: tournament.name,
+        request_id: request.id
+    });
+    
+    res.json({ 
+        message: 'Tournament request submitted successfully',
+        request_id: request.id,
+        status: 'pending',
+        tournament_name: tournament.name
+    });
+}));
+
+// Get user's own tournament requests
+app.get('/api/my-requests', authenticateToken, asyncHandler(async (req, res) => {
+    const { status } = req.query;
+    
+    const matchQuery = { user_id: req.user.id };
+    if (status) {
+        matchQuery.status = status;
+    }
+    
+    const requests = await db.collection('tournament_requests').aggregate([
+        { $match: matchQuery },
         {
             $lookup: {
                 from: 'players',
@@ -1627,114 +2084,20 @@ app.get('/api/tournaments/:tournament_id/registrations', authenticateToken, asyn
         },
         { $unwind: '$player' },
         {
-            $project: {
-                id: 1,
-                player_id: 1,
-                tournament_id: 1,
-                registration_date: 1,
-                status: 1,
-                registration_source: 1,
-                contact_email: 1,
-                contact_phone: 1,
-                federation: 1,
-                seed: 1,
-                'player.name': 1,
-                'player.rating': 1,
-                'player.title': 1,
-                'player.birth_year': 1
+            $lookup: {
+                from: 'tournaments',
+                localField: 'tournament_id',
+                foreignField: 'id',
+                as: 'tournament'
             }
         },
-        { $sort: { 'player.rating': -1, 'player.name': 1 } }
+        { $unwind: '$tournament' },
+        { $sort: { request_date: -1 } }
     ]).toArray();
     
-    // Group by registration source
-    const registered = participants.filter(p => p.registration_source === 'google_form');
-    const manual = participants.filter(p => !p.registration_source || p.registration_source === 'manual');
-    
-    // Get registration stats
-    const stats = {
-        total_participants: participants.length,
-        registered_via_form: registered.length,
-        manually_added: manual.length,
-        active: participants.filter(p => p.status === 'registered' || p.status === 'active').length,
-        withdrawn: participants.filter(p => p.status === 'withdrawn').length
-    };
-    
-    res.json({
-        tournament,
-        participants,
-        registered_players: registered,
-        manual_players: manual,
-        stats
-    });
+    res.json(requests);
 }));
 
-// Manage individual registration status
-app.put('/api/tournaments/:tournament_id/registrations/:participant_id', authenticateToken, asyncHandler(async (req, res) => {
-    const { tournament_id, participant_id } = req.params;
-    const { status, notes } = req.body;
-    
-    const validStatuses = ['registered', 'active', 'withdrawn', 'disqualified'];
-    if (status && !validStatuses.includes(status)) {
-        return res.status(400).json({ error: 'Invalid status' });
-    }
-    
-    const updateData = {};
-    if (status) updateData.status = status;
-    if (notes !== undefined) updateData.notes = notes;
-    updateData.updated_at = new Date().toISOString();
-    
-    const result = await db.collection('tournament_participants').updateOne(
-        { id: participant_id, tournament_id },
-        { $set: updateData }
-    );
-    
-    if (result.matchedCount === 0) {
-        return res.status(404).json({ error: 'Participant not found' });
-    }
-    
-    res.json({ message: 'Participant status updated successfully' });
-}));
-
-// Bulk approve/reject registrations
-app.post('/api/tournaments/:tournament_id/registrations/bulk-action', authenticateToken, asyncHandler(async (req, res) => {
-    const { tournament_id } = req.params;
-    const { action, participant_ids } = req.body;
-    
-    if (!['approve', 'reject', 'withdraw'].includes(action)) {
-        return res.status(400).json({ error: 'Invalid action' });
-    }
-    
-    if (!participant_ids || !Array.isArray(participant_ids)) {
-        return res.status(400).json({ error: 'participant_ids must be an array' });
-    }
-    
-    const statusMap = {
-        approve: 'active',
-        reject: 'rejected',
-        withdraw: 'withdrawn'
-    };
-    
-    const result = await db.collection('tournament_participants').updateMany(
-        { 
-            id: { $in: participant_ids },
-            tournament_id
-        },
-        { 
-            $set: {
-                status: statusMap[action],
-                updated_at: new Date().toISOString()
-            }
-        }
-    );
-    
-    res.json({ 
-        message: `${action} action completed`,
-        modified_count: result.modifiedCount
-    });
-}));
-
-// Tournament Request Management Routes
 app.get('/api/tournament-requests', authenticateToken, asyncHandler(async (req, res) => {
     // Admin only endpoint
     if (req.user.role !== 'admin') {
@@ -1856,21 +2219,136 @@ app.put('/api/tournament-requests/:request_id', authenticateToken, asyncHandler(
     
     const requestDetails = requestWithDetails[0];
     
-    // Send WhatsApp notification
+    // If approved, add player to tournament participants
     if (action === 'approve') {
-        const whatsappMessage = `🎉 Great news, ${requestDetails.user.name}!\n\nYour tournament registration request has been APPROVED!\n\n🏆 Tournament: ${requestDetails.tournament.name}\n📍 Location: ${requestDetails.tournament.location}\n📅 Date: ${new Date(requestDetails.tournament.start_date).toLocaleDateString()}\n⏰ Time Control: ${requestDetails.tournament.time_control}\n\nYou are now officially registered. Good luck! ♟️`;
+        // Check if player is already a participant (shouldn't happen, but be safe)
+        const existingParticipant = await db.collection('tournament_participants').findOne({
+            tournament_id: requestDetails.tournament_id,
+            player_id: requestDetails.player_id,
+            status: { $ne: 'withdrawn' }
+        });
         
-        await sendWhatsAppNotification(requestDetails.user.phone, whatsappMessage);
-    } else if (action === 'reject') {
-        const whatsappMessage = `Hello ${requestDetails.user.name},\n\nYour tournament registration request was not approved.\n\n🏆 Tournament: ${requestDetails.tournament.name}\n${admin_notes ? '\nReason: ' + admin_notes : ''}\n\nYou can contact the tournament organizers for more information.`;
-        
-        await sendWhatsAppNotification(requestDetails.user.phone, whatsappMessage);
+        if (!existingParticipant) {
+            // Create tournament participant
+            const participant = createDocument({
+                tournament_id: requestDetails.tournament_id,
+                player_id: requestDetails.player_id,
+                registration_date: new Date().toISOString(),
+                status: 'registered',
+                registration_source: 'admin_approval',
+                approved_by: req.user.id
+            });
+            
+            await db.collection('tournament_participants').insertOne(participant);
+            console.log('✅ Added player to tournament participants:', {
+                player: requestDetails.player.name,
+                tournament: requestDetails.tournament.name
+            });
+        }
     }
+    
+    // Create notification for the user
+    const notificationData = {
+        user_id: requestDetails.user_id,
+        type: action === 'approve' ? 'tournament_approved' : 'tournament_rejected',
+        title: action === 'approve' ? 'Tournament Request Approved!' : 'Tournament Request Rejected',
+        message: action === 'approve' 
+            ? `Your request to join "${requestDetails.tournament.name}" has been approved! You are now registered for the tournament.`
+            : `Your request to join "${requestDetails.tournament.name}" has been rejected.${admin_notes ? ' Reason: ' + admin_notes : ''}`,
+        data: {
+            request_id: request_id,
+            tournament_id: requestDetails.tournament_id,
+            tournament_name: requestDetails.tournament.name,
+            action: action,
+            admin_notes: admin_notes || null
+        },
+        read: false,
+        created_date: new Date().toISOString()
+    };
+    
+    const notification = createDocument(notificationData);
+    await db.collection('notifications').insertOne(notification);
+    
+    console.log(`✅ Created ${action} notification for user:`, requestDetails.user.email);
     
     res.json({ 
         message: `Request ${action}d successfully`,
         request: requestDetails
     });
+}));
+
+// Database Cleanup Routes
+app.post('/api/admin/cleanup-duplicates', authenticateToken, asyncHandler(async (req, res) => {
+    console.log('🧺 Starting duplicate participant cleanup...');
+    
+    try {
+        // Find tournaments with duplicate participants
+        const duplicates = await db.collection('tournament_participants').aggregate([
+            {
+                $match: {
+                    status: { $ne: 'withdrawn' }
+                }
+            },
+            {
+                $group: {
+                    _id: { tournament_id: '$tournament_id', player_id: '$player_id' },
+                    count: { $sum: 1 },
+                    records: { $push: '$$ROOT' }
+                }
+            },
+            {
+                $match: {
+                    count: { $gt: 1 }
+                }
+            }
+        ]).toArray();
+        
+        console.log(`🔍 Found ${duplicates.length} sets of duplicate records`);
+        
+        let cleanedCount = 0;
+        
+        for (const duplicate of duplicates) {
+            const records = duplicate.records;
+            // Keep the most recent record, mark others as withdrawn
+            const sortedRecords = records.sort((a, b) => new Date(b.registration_date) - new Date(a.registration_date));
+            const toKeep = sortedRecords[0];
+            const toRemove = sortedRecords.slice(1);
+            
+            console.log(`🧺 Cleaning ${toRemove.length} duplicate records for player ${duplicate._id.player_id} in tournament ${duplicate._id.tournament_id}`);
+            
+            // Mark duplicates as withdrawn
+            for (const record of toRemove) {
+                await db.collection('tournament_participants').updateOne(
+                    { id: record.id },
+                    { 
+                        $set: { 
+                            status: 'withdrawn',
+                            withdrawn_date: new Date().toISOString(),
+                            withdrawn_by: req.user.id,
+                            cleanup_reason: 'duplicate_removal'
+                        }
+                    }
+                );
+                cleanedCount++;
+            }
+        }
+        
+        console.log(`✅ Cleanup completed. Removed ${cleanedCount} duplicate records.`);
+        
+        res.json({
+            message: 'Duplicate cleanup completed',
+            duplicates_found: duplicates.length,
+            records_cleaned: cleanedCount,
+            details: duplicates.map(d => ({
+                tournament_id: d._id.tournament_id,
+                player_id: d._id.player_id,
+                duplicate_count: d.count
+            }))
+        });
+    } catch (error) {
+        console.error('❌ Cleanup failed:', error);
+        res.status(500).json({ error: 'Cleanup failed', details: error.message });
+    }
 }));
 
 // Notification Management Routes
@@ -1927,21 +2405,6 @@ app.put('/api/notifications/mark-all-read', authenticateToken, asyncHandler(asyn
     });
 }));
 
-// Test WhatsApp endpoint (for debugging)
-app.post('/api/test-whatsapp', authenticateToken, asyncHandler(async (req, res) => {
-    const { phoneNumber, message } = req.body;
-    
-    if (!phoneNumber || !message) {
-        return res.status(400).json({ error: 'phoneNumber and message are required' });
-    }
-    
-    const result = await sendWhatsAppNotification(phoneNumber, message);
-    
-    res.json({
-        message: 'WhatsApp test completed',
-        result: result
-    });
-}));
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -1969,9 +2432,6 @@ app.use((error, req, res, next) => {
 // Start server
 const startServer = async () => {
     await connectDB();
-    
-    // Initialize Google Forms service
-    await googleFormsService.initialize();
     
     app.listen(PORT, () => {
         console.log(`🚀 Chess Results API server running on port ${PORT}`);

@@ -117,6 +117,13 @@ backend/
 - `PORT`: Server port (default: 3001)
 - `NODE_ENV`: Environment mode (development/production)
 - `CORS_ORIGINS`: CORS allowed origins (default: *)
+- `FRONTEND_URL`: Base URL used to build password reset links (default: http://localhost:3000)
+- `BACKEND_URL`: Backend base URL (used for defaults)
+- `APP_NAME`: Used in email subjects/content
+- SMTP settings (required for sending emails):
+  - `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE` (true/false)
+  - `SMTP_USER`, `SMTP_PASS`
+  - `SMTP_FROM` (e.g., "Chess Results <no-reply@yourdomain.com>")
 
 ## Troubleshooting
 
