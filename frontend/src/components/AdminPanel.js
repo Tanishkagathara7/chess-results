@@ -9,19 +9,21 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Badge } from './ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Alert, AlertDescription } from './ui/alert';
-import { Trophy, Users, Plus, Edit, Trash2, Calendar, MapPin, AlertCircle, Shuffle, ChevronLeft, ChevronRight, Settings } from 'lucide-react';
+import { Trophy, Users, Plus, Edit, Trash2, Calendar, MapPin, AlertCircle, Clock, CheckCircle, XCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { validateTournamentForm, formatDateError } from '../utils/validation';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5000';
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:3001';
 const API = `${BACKEND_URL}/api`;
 
 const AdminPanel = () => {
     const navigate = useNavigate();
+    const todayStr = new Date().toISOString().split('T')[0];
     // State management
     const [activeTab, setActiveTab] = useState('tournaments');
     const [tournaments, setTournaments] = useState([]);
     const [players, setPlayers] = useState([]);
+    const [requests, setRequests] = useState([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
@@ -35,9 +37,7 @@ const AdminPanel = () => {
         rounds: '',
         time_control: '',
         arbiter: '',
-        elimination_per_round: '0',
         tournament_type: 'swiss',
-        use_round_specific: false,
         round_eliminations: []
     });
     
@@ -57,44 +57,79 @@ const AdminPanel = () => {
     const [tournamentParticipants, setTournamentParticipants] = useState([]);
     const [isAddPlayersDialogOpen, setIsAddPlayersDialogOpen] = useState(false);
     const [selectedPlayers, setSelectedPlayers] = useState([]);
-    const [availablePlayers, setAvailablePlayers] = useState([]);
+const [availablePlayers, setAvailablePlayers] = useState([]);
     
-    // Pairings state
-    const [pairings, setPairings] = useState([]);
-    const [currentRound, setCurrentRound] = useState(1);
-    const [selectedTournamentForPairing, setSelectedTournamentForPairing] = useState(null);
-    const [pairingTournaments, setPairingTournaments] = useState([]);
-    const [roundPairings, setRoundPairings] = useState([]);
-    const [isGeneratingPairings, setIsGeneratingPairings] = useState(false);
+    // Pairings & Results state
+    const [pairingsMap, setPairingsMap] = useState({}); // { [tournamentId]: Array<pairing> }
+    const [pairingsExpanded, setPairingsExpanded] = useState({}); // { [tournamentId]: boolean }
+    const [pairingsLoadingId, setPairingsLoadingId] = useState(null);
+    const [generatingPairingsId, setGeneratingPairingsId] = useState(null);
+    const [savingResultId, setSavingResultId] = useState(null);
+    const [resultDraft, setResultDraft] = useState({}); // { pairingId: '1-0' | '0-1' | '1/2-1/2' }
+
+    const [resultsExpanded, setResultsExpanded] = useState({}); // { [tournamentId]: boolean }
+    const [resultsCache, setResultsCache] = useState({}); // { [tournamentId]: { [round]: resultData } }
+    const [resultsLoadingKey, setResultsLoadingKey] = useState(null);
     
-    // Results state
-    const [selectedTournamentForResults, setSelectedTournamentForResults] = useState(null);
-    const [resultsTournaments, setResultsTournaments] = useState([]);
-    const [tournamentResults, setTournamentResults] = useState([]);
-    const [filteredResults, setFilteredResults] = useState([]);
-    const [selectedPlayer, setSelectedPlayer] = useState(null);
-    const [playerResults, setPlayerResults] = useState([]);
-    const [loadingResults, setLoadingResults] = useState(false);
-    const [searchQuery, setSearchQuery] = useState('');
+    // Manual refresh only - no automatic polling
 
     // Fetch data
     useEffect(() => {
         fetchAllData();
     }, []);
     
-    // Note: Results are fetched manually or via refresh button to avoid loops
+    // Real-time polling disabled - users can manually refresh using the refresh button
+    
 
     const fetchAllData = async () => {
         try {
-            const [tournamentsRes, playersRes] = await Promise.all([
-                axios.get(`${API}/tournaments`),
-                axios.get(`${API}/players`)
+            // Get auth token
+            const token = localStorage.getItem('token');
+            const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
+            
+            const [tournamentsRes, playersRes, requestsRes] = await Promise.all([
+                axios.get(`${API}/tournaments`, { headers: authHeaders }),
+                axios.get(`${API}/players`, { headers: authHeaders }),
+                axios.get(`${API}/tournament-requests`, { headers: authHeaders })
             ]);
             setTournaments(tournamentsRes.data);
             setPlayers(playersRes.data);
+            setRequests(requestsRes.data);
         } catch (error) {
             setError('Failed to fetch data');
             console.error('Error fetching data:', error);
+            
+            // If it's an auth error, redirect to login
+            if (error.response?.status === 401) {
+                localStorage.removeItem('token');
+                navigate('/admin/login');
+            }
+        }
+    };
+    
+    // Fetch only tournament requests (for real-time polling)
+    const fetchRequestsOnly = async (showNotification = false) => {
+        try {
+            const token = localStorage.getItem('token');
+            const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
+            
+            const requestsRes = await axios.get(`${API}/tournament-requests`, { headers: authHeaders });
+            const newRequests = requestsRes.data;
+            
+            // Check if there are new requests
+            if (showNotification && newRequests.length > requests.length) {
+                const newRequestCount = newRequests.length - requests.length;
+                showMessage(`🔔 ${newRequestCount} new tournament request${newRequestCount > 1 ? 's' : ''} received!`);
+            }
+            
+            setRequests(newRequests);
+        } catch (error) {
+            console.error('Error fetching requests:', error);
+            // Don't show error messages for polling failures to avoid spam
+            if (error.response?.status === 401) {
+                localStorage.removeItem('token');
+                navigate('/admin/login');
+            }
         }
     };
 
@@ -135,22 +170,6 @@ const AdminPanel = () => {
                 end_date: new Date(tournamentForm.end_date).toISOString()
             };
             
-            // Handle elimination logic
-            if (tournamentForm.use_round_specific) {
-                // Use round-specific eliminations, remove the general elimination field
-                delete tournamentData.elimination_per_round;
-                tournamentData.round_eliminations = tournamentForm.round_eliminations.map(re => ({
-                    round: parseInt(re.round),
-                    eliminations: parseInt(re.eliminations)
-                }));
-            } else {
-                // Use general elimination per round
-                tournamentData.elimination_per_round = parseInt(tournamentForm.elimination_per_round) || 0;
-                delete tournamentData.round_eliminations;
-            }
-            
-            // Remove UI-only fields
-            delete tournamentData.use_round_specific;
 
             if (editingId) {
                 await axios.put(`${API}/tournaments/${editingId}`, tournamentData);
@@ -179,9 +198,7 @@ const AdminPanel = () => {
             rounds: tournament.rounds.toString(),
             time_control: tournament.time_control,
             arbiter: tournament.arbiter,
-            elimination_per_round: (tournament.elimination_per_round || 0).toString(),
             tournament_type: tournament.tournament_type || 'swiss',
-            use_round_specific: Boolean(tournament.round_eliminations && tournament.round_eliminations.length > 0),
             round_eliminations: tournament.round_eliminations || []
         });
         setEditingId(tournament.id);
@@ -209,9 +226,7 @@ const AdminPanel = () => {
             rounds: '',
             time_control: '',
             arbiter: '',
-            elimination_per_round: '0',
             tournament_type: 'swiss',
-            use_round_specific: false,
             round_eliminations: []
         });
         setEditingId(null);
@@ -222,20 +237,29 @@ const AdminPanel = () => {
     const handleTournamentFormChange = (field, value) => {
         const newForm = { ...tournamentForm, [field]: value };
         
-        // If rounds changed, update round eliminations array
-        if (field === 'rounds' && value && newForm.use_round_specific) {
-            const numRounds = parseInt(value);
-            const currentEliminations = newForm.round_eliminations || [];
-            const newEliminations = [];
-            
-            for (let i = 1; i <= numRounds; i++) {
-                const existing = currentEliminations.find(re => re.round === i);
-                newEliminations.push({
-                    round: i,
-                    eliminations: existing ? existing.eliminations : 0
+        // If tournament type changes to knockout, initialize round eliminations
+        if (field === 'tournament_type' && value === 'knockout' && tournamentForm.rounds) {
+            const rounds = parseInt(tournamentForm.rounds);
+            if (rounds > 0 && newForm.round_eliminations.length === 0) {
+                newForm.round_eliminations = Array.from({ length: rounds }, (_, i) => ({
+                    round: i + 1,
+                    eliminations: i === rounds - 1 ? 0 : 1 // Final round has no eliminations
+                }));
+            }
+        }
+        
+        // If rounds change and it's knockout, update round eliminations
+        if (field === 'rounds' && newForm.tournament_type === 'knockout') {
+            const rounds = parseInt(value);
+            if (rounds > 0) {
+                newForm.round_eliminations = Array.from({ length: rounds }, (_, i) => {
+                    const existing = newForm.round_eliminations.find(re => re.round === i + 1);
+                    return existing || {
+                        round: i + 1,
+                        eliminations: i === rounds - 1 ? 0 : 1 // Final round has no eliminations
+                    };
                 });
             }
-            newForm.round_eliminations = newEliminations;
         }
         
         setTournamentForm(newForm);
@@ -245,28 +269,17 @@ const AdminPanel = () => {
         setValidationErrors(validation.errors);
     };
     
-    // Helper functions for round-specific eliminations
-    const handleRoundEliminationChange = (roundNumber, eliminations) => {
-        const newEliminations = tournamentForm.round_eliminations.map(re => 
-            re.round === roundNumber ? { ...re, eliminations: parseInt(eliminations) || 0 } : re
-        );
-        setTournamentForm({ ...tournamentForm, round_eliminations: newEliminations });
-    };
-    
-    const toggleRoundSpecific = (useRoundSpecific) => {
-        const newForm = { ...tournamentForm, use_round_specific: useRoundSpecific };
-        
-        if (useRoundSpecific && tournamentForm.rounds) {
-            // Initialize round eliminations based on current rounds
-            const numRounds = parseInt(tournamentForm.rounds);
-            const eliminations = [];
-            for (let i = 1; i <= numRounds; i++) {
-                eliminations.push({ round: i, eliminations: 0 });
-            }
-            newForm.round_eliminations = eliminations;
-        }
-        
-        setTournamentForm(newForm);
+    // Handle round elimination changes
+    const handleRoundEliminationChange = (roundIndex, eliminations) => {
+        const newEliminations = [...tournamentForm.round_eliminations];
+        newEliminations[roundIndex] = {
+            ...newEliminations[roundIndex],
+            eliminations: parseInt(eliminations) || 0
+        };
+        setTournamentForm({
+            ...tournamentForm,
+            round_eliminations: newEliminations
+        });
     };
 
     // Tournament participants functions
@@ -319,9 +332,12 @@ const AdminPanel = () => {
         console.log('⭕ Adding players:', selectedPlayers, 'to tournament:', selectedTournament.id);
         setLoading(true);
         try {
+            const token = localStorage.getItem('token');
+            const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
+            
             const promises = selectedPlayers.map(playerId => {
                 console.log('📤 Adding player:', playerId);
-                return axios.post(`${API}/tournaments/${selectedTournament.id}/participants`, { player_id: playerId });
+                return axios.post(`${API}/tournaments/${selectedTournament.id}/participants`, { player_id: playerId }, { headers: authHeaders });
             });
             
             const results = await Promise.all(promises);
@@ -329,10 +345,12 @@ const AdminPanel = () => {
             
             showMessage(`${selectedPlayers.length} player(s) added to tournament successfully`);
             
-            // Refresh participants list
+            // Refresh participants list and available players
             await fetchTournamentParticipants(selectedTournament.id);
             
-            setIsAddPlayersDialogOpen(false);
+            // Update available players by removing the added ones
+            setAvailablePlayers(prev => prev.filter(player => !selectedPlayers.includes(player.id)));
+            
             setSelectedPlayers([]);
         } catch (error) {
             console.error('❌ Failed to add players:', {
@@ -350,8 +368,11 @@ const AdminPanel = () => {
         console.log('⭕ Adding single player:', playerId, 'to tournament:', selectedTournament.id);
         setLoading(true);
         try {
+            const token = localStorage.getItem('token');
+            const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
+            
             console.log('📤 Adding player:', playerId);
-            const response = await axios.post(`${API}/tournaments/${selectedTournament.id}/participants`, { player_id: playerId });
+            const response = await axios.post(`${API}/tournaments/${selectedTournament.id}/participants`, { player_id: playerId }, { headers: authHeaders });
             console.log('✅ Add player result:', response.data);
             
             showMessage('Player added to tournament successfully');
@@ -374,34 +395,38 @@ const AdminPanel = () => {
     };
 
     const handleRemoveParticipant = async (tournamentId, playerId) => {
-        if (!window.confirm('Are you sure you want to remove this player from the tournament?')) return;
+        if (!window.confirm('Are you sure you want to remove this player from the tournament? The player will be notified of their removal.')) return;
         
         try {
-            await axios.delete(`${API}/tournaments/${tournamentId}/participants/${playerId}`);
-            showMessage('Player removed from tournament successfully');
+            const token = localStorage.getItem('token');
+            const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
+            
+            const response = await axios.delete(`${API}/tournaments/${tournamentId}/participants/${playerId}`, { headers: authHeaders });
+            
+            // Show different messages based on whether notification was sent
+            if (response.data.notification_sent) {
+                showMessage(`Player removed from tournament successfully. Notification sent to ${response.data.notified_user}.`);
+            } else {
+                showMessage('Player removed from tournament successfully. No user notification sent (no associated user found).');
+            }
             
             // Refresh participants list
             await fetchTournamentParticipants(tournamentId);
+            
+            // If we're in the add players dialog, refresh the available players list
+            if (tournamentId === selectedTournament?.id && isAddPlayersDialogOpen) {
+                // Find the removed player and add them back to available players
+                const removedPlayer = players.find(player => player.id === playerId);
+                if (removedPlayer) {
+                    setAvailablePlayers(prev => [...prev, removedPlayer].sort((a, b) => b.rating - a.rating));
+                }
+            }
         } catch (error) {
-            showMessage('Failed to remove player from tournament', true);
+            console.error('❌ Failed to remove player:', error);
+            showMessage(error.response?.data?.error || 'Failed to remove player from tournament', true);
         }
     };
     
-    const handleEliminatePlayer = async (tournamentId, playerId) => {
-        if (!window.confirm('Are you sure you want to eliminate this player? They will not be paired in future rounds.')) return;
-        
-        try {
-            await axios.put(`${API}/tournaments/${tournamentId}/participants/${playerId}`, {
-                status: 'eliminated'
-            });
-            showMessage('Player eliminated from tournament');
-            
-            // Refresh participants list
-            await fetchTournamentParticipants(tournamentId);
-        } catch (error) {
-            showMessage('Failed to eliminate player', true);
-        }
-    };
 
     const togglePlayerSelection = (playerId) => {
         console.log('🎯 Toggling player selection for:', playerId);
@@ -414,183 +439,142 @@ const AdminPanel = () => {
         });
     };
 
+
     // Pairings functions
-    const fetchTournamentsForPairing = async () => {
+    const fetchTournamentPairings = async (tournamentId) => {
         try {
-            const response = await axios.get(`${API}/tournaments`);
-            setPairingTournaments(response.data);
+            setPairingsLoadingId(tournamentId);
+            const res = await axios.get(`${API}/tournaments/${tournamentId}/pairings`);
+            setPairingsMap(prev => ({ ...prev, [tournamentId]: res.data }));
         } catch (error) {
-            console.error('Error fetching tournaments for pairing:', error);
-            showMessage('Failed to fetch tournaments', true);
+            console.error('Error fetching pairings:', error);
+            showMessage(error.response?.data?.error || 'Failed to fetch pairings', true);
+        } finally {
+            setPairingsLoadingId(null);
         }
     };
 
-    const fetchRoundPairings = async (tournamentId, round) => {
-        try {
-            const response = await axios.get(`${API}/tournaments/${tournamentId}/pairings/${round}`);
-            setRoundPairings(response.data);
-        } catch (error) {
-            if (error.response?.status === 404) {
-                setRoundPairings([]);
-            } else {
-                console.error('Error fetching round pairings:', error);
-                showMessage('Failed to fetch round pairings', true);
-            }
-        }
+    const getNextRoundNumber = (tournament, pairingsForTournament = []) => {
+        if (!pairingsForTournament || pairingsForTournament.length === 0) return 1;
+        const maxRound = pairingsForTournament.reduce((m, p) => Math.max(m, p.round || 0), 0);
+        return Math.min(maxRound + 1, tournament.rounds || maxRound + 1);
     };
 
-    const generateSimplePairings = (participants) => {
-        // Simple Swiss-style pairing algorithm
-        const shuffled = [...participants].sort((a, b) => {
-            // Sort by score (if available) then by rating
-            const scoreA = a.score || 0;
-            const scoreB = b.score || 0;
-            if (scoreA !== scoreB) return scoreB - scoreA;
-            return (b.player.rating || 0) - (a.player.rating || 0);
-        });
+    const handleGeneratePairings = async (tournament) => {
+        try {
+            const pairingsForTournament = pairingsMap[tournament.id] || [];
+            const nextRound = getNextRoundNumber(tournament, pairingsForTournament);
 
-        const pairings = [];
-        const paired = new Set();
-
-        for (let i = 0; i < shuffled.length; i++) {
-            if (paired.has(shuffled[i].id)) continue;
-
-            let opponent = null;
-            for (let j = i + 1; j < shuffled.length; j++) {
-                if (!paired.has(shuffled[j].id)) {
-                    opponent = shuffled[j];
-                    break;
+            // Knockout guard: require previous round completion before generating next
+            if (tournament.tournament_type === 'knockout' && nextRound > 1) {
+                const lastCompleted = (tournament.completed_rounds || []).slice(-1)[0] || 0;
+                if (lastCompleted < nextRound - 1) {
+                    showMessage(`Please complete round ${nextRound - 1} before generating round ${nextRound} (knockout)`, true);
+                    return;
                 }
             }
 
-            if (opponent) {
-                pairings.push({
-                    white_player_id: shuffled[i].player_id,
-                    black_player_id: opponent.player_id,
-                    result: null
-                });
-                paired.add(shuffled[i].id);
-                paired.add(opponent.id);
+            setGeneratingPairingsId(tournament.id);
+            const token = localStorage.getItem('token');
+            const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
+            const body = { round: nextRound, options: { randomize: true } };
+            const res = await axios.post(`${API}/tournaments/${tournament.id}/pairings/generate`, body, { headers: authHeaders });
+            showMessage(res.data?.message || `Generated pairings for round ${nextRound}`);
+            await fetchTournamentPairings(tournament.id);
+        } catch (error) {
+            console.error('Generate pairings error:', error);
+            const status = error.response?.status;
+            if (status === 404) {
+                showMessage(error.response?.data?.error || 'Endpoint not found or tournament missing. If you recently updated the backend, please restart it and try again.', true);
             } else {
-                // Bye for odd number of players
-                pairings.push({
-                    white_player_id: shuffled[i].player_id,
-                    black_player_id: null,
-                    result: '1-0' // Bye = win for white
-                });
-                paired.add(shuffled[i].id);
+                showMessage(error.response?.data?.error || 'Failed to generate pairings', true);
             }
-        }
-
-        return pairings;
-    };
-
-    const handleGeneratePairings = async () => {
-        if (!selectedTournamentForPairing) {
-            showMessage('Please select a tournament first', true);
-            return;
-        }
-
-        setIsGeneratingPairings(true);
-        try {
-            // Fetch current participants
-            const participantsRes = await axios.get(`${API}/tournaments/${selectedTournamentForPairing.id}/participants`);
-            const allParticipants = participantsRes.data;
-            
-            // Filter out eliminated players
-            const activeParticipants = allParticipants.filter(p => p.status !== 'eliminated');
-
-            if (activeParticipants.length < 2) {
-                showMessage('At least 2 active players are required to generate pairings', true);
-                return;
-            }
-            
-            console.log(`💡 Total participants: ${allParticipants.length}, Active: ${activeParticipants.length}`);
-            const participants = activeParticipants;
-
-            // Generate pairings using our algorithm
-            const generatedPairings = generateSimplePairings(participants);
-            console.log('🎲 Generated pairings:', generatedPairings);
-
-            // Save pairings to backend
-            const pairingData = {
-                tournament_id: selectedTournamentForPairing.id,
-                round: currentRound,
-                pairings: generatedPairings
-            };
-            console.log('📤 Sending pairing data:', pairingData);
-
-            await axios.post(`${API}/tournaments/${selectedTournamentForPairing.id}/pairings`, pairingData);
-            
-            showMessage(`Pairings generated successfully for Round ${currentRound}`);
-            
-            // Refresh pairings display
-            await fetchRoundPairings(selectedTournamentForPairing.id, currentRound);
-            
-        } catch (error) {
-            console.error('Failed to generate pairings:', {
-                error: error.message,
-                status: error.response?.status,
-                data: error.response?.data,
-                config: error.config
-            });
-            const errorMessage = error.response?.data?.error || `Failed to generate pairings (${error.response?.status || 'Unknown error'})`;
-            showMessage(errorMessage, true);
         } finally {
-            setIsGeneratingPairings(false);
+            setGeneratingPairingsId(null);
         }
     };
 
-    const handleResultChange = async (pairingId, result) => {
-        try {
-            await axios.put(`${API}/pairings/${pairingId}`, { result });
-            showMessage('Result updated successfully');
-            
-            // Refresh pairings display
-            await fetchRoundPairings(selectedTournamentForPairing.id, currentRound);
-            
-        } catch (error) {
-            console.error('Failed to update result:', error);
-            showMessage('Failed to update result', true);
+    const togglePairingsExpand = async (tournament) => {
+        setPairingsExpanded(prev => ({ ...prev, [tournament.id]: !prev[tournament.id] }));
+        if (!pairingsMap[tournament.id]) {
+            await fetchTournamentPairings(tournament.id);
         }
     };
-    
-    const handleCompleteRound = async () => {
-        if (!selectedTournamentForPairing || !currentRound) {
-            showMessage('Please select a tournament and round first', true);
-            return;
-        }
-        
+
+    const handleCompleteRound = async (tournamentId, round) => {
         try {
-            // Check if all games have results
-            const incompleteGames = roundPairings.filter(pairing => 
-                pairing.black_player && !pairing.result // Has opponent but no result
-            );
-            
-            if (incompleteGames.length > 0) {
-                showMessage(`Cannot complete round: ${incompleteGames.length} game(s) still pending results`, true);
-                return;
-            }
-            
-            // Mark round as complete
-            await axios.post(`${API}/tournaments/${selectedTournamentForPairing.id}/rounds/${currentRound}/complete`);
-            
-            showMessage(`Round ${currentRound} completed successfully! Results have been updated.`);
-            
-            // Refresh the pairings display
-            await fetchRoundPairings(selectedTournamentForPairing.id, currentRound);
-            
-            // Auto-refresh Results section if it's loaded
-            if (selectedTournamentForResults && selectedTournamentForResults.id === selectedTournamentForPairing.id) {
-                console.log('🔄 Auto-refreshing Results section after round completion');
-                await fetchTournamentResults(selectedTournamentForResults.id);
-            }
-            
+            const token = localStorage.getItem('token');
+            const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
+            const res = await axios.post(`${API}/tournaments/${tournamentId}/rounds/${round}/complete`, {}, { headers: authHeaders });
+            showMessage(res.data?.message || `Round ${round} completed`);
+            await Promise.all([fetchAllData(), fetchTournamentPairings(tournamentId)]);
         } catch (error) {
-            console.error('Failed to complete round:', error);
+            console.error('Complete round error:', error);
             showMessage(error.response?.data?.error || 'Failed to complete round', true);
         }
     };
+
+    const isTournamentEnded = (t) => {
+        const rounds = t.rounds || 0;
+        const completedCount = Array.isArray(t.completed_rounds) ? t.completed_rounds.length : 0;
+        const lastCompleted = t.last_completed_round || 0;
+        return t.tournament_over === true || (rounds > 0 && (completedCount >= rounds || lastCompleted >= rounds));
+    };
+
+    const goToFinalStandings = async (t) => {
+        setActiveTab('results');
+        setResultsExpanded(prev => ({ ...prev, [t.id]: true }));
+        await fetchRoundResults(t.id, t.rounds);
+    };
+
+    const handleSavePairingResult = async (tournamentId, pairingId, value) => {
+        if (!value) {
+            showMessage('Please select a result before saving', true);
+            return;
+        }
+        if (!['1-0','0-1','1/2-1/2'].includes(value)) {
+            showMessage('Invalid result value', true);
+            return;
+        }
+        try {
+            setSavingResultId(pairingId);
+            const token = localStorage.getItem('token');
+            const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
+            await axios.put(`${API}/pairings/${pairingId}`, { result: value }, { headers: authHeaders });
+            showMessage('Result saved');
+            // Clear local draft and refresh list
+            setResultDraft(prev => { const n = { ...prev }; delete n[pairingId]; return n; });
+            await fetchTournamentPairings(tournamentId);
+        } catch (error) {
+            console.error('Save pairing result error:', error);
+            showMessage(error.response?.data?.error || 'Failed to save result', true);
+        } finally {
+            setSavingResultId(null);
+        }
+    };
+
+    // Results functions
+    const fetchRoundResults = async (tournamentId, round) => {
+        const key = `${tournamentId}:${round}`;
+        try {
+            setResultsLoadingKey(key);
+            const res = await axios.get(`${API}/tournaments/${tournamentId}/rounds/${round}/results`);
+            setResultsCache(prev => ({
+                ...prev,
+                [tournamentId]: { ...(prev[tournamentId] || {}), [round]: res.data }
+            }));
+        } catch (error) {
+            console.error('Error fetching results:', error);
+            showMessage(error.response?.data?.error || 'Failed to fetch results', true);
+        } finally {
+            setResultsLoadingKey(null);
+        }
+    };
+
+    const toggleResultsExpand = (tournament) => {
+        setResultsExpanded(prev => ({ ...prev, [tournament.id]: !prev[tournament.id] }));
+    };
+
 
     // Player operations
     const handlePlayerSubmit = async (e) => {
@@ -655,213 +639,62 @@ const AdminPanel = () => {
         });
         setEditingId(null);
     };
-    
-    // Results functions
-    const fetchTournamentsForResults = async () => {
-        try {
-            const response = await axios.get(`${API}/tournaments`);
-            setResultsTournaments(response.data);
-        } catch (error) {
-            showMessage('Failed to fetch tournaments for results', true);
-            console.error('Error fetching tournaments for results:', error);
-        }
-    };
-    
-    const fetchTournamentResults = async (tournamentId) => {
-        if (!tournamentId) return;
+
+    // Request management functions
+    const handleApproveRequest = async (requestId, playerName, tournamentName) => {
+        if (!window.confirm(`Approve ${playerName} for ${tournamentName}?`)) return;
         
-        setLoadingResults(true);
         try {
-            console.log('🔄 Fetching tournament results for:', tournamentId);
-            const [participantsRes, pairingsRes] = await Promise.all([
-                axios.get(`${API}/tournaments/${tournamentId}/participants`),
-                axios.get(`${API}/tournaments/${tournamentId}/pairings/all`).catch(error => {
-                    console.error('❌ Error fetching pairings:', error);
-                    return { data: [] };
-                })
-            ]);
+            setLoading(true);
+            const token = localStorage.getItem('token');
+            const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
             
-            const participants = participantsRes.data;
-            const allPairings = pairingsRes.data;
+            await axios.put(`${API}/tournament-requests/${requestId}`, {
+                action: 'approve'
+            }, { headers: authHeaders });
             
-            console.log('👥 Participants found:', participants.length);
-            console.log('🎯 Pairings found:', allPairings.length);
-            console.log('📋 Sample pairing data:', allPairings.slice(0, 1));
-            
-            // Debug participant structure
-            if (participants.length > 0) {
-                console.log('📋 Participant structure:', {
-                    player_id: participants[0].player_id,
-                    player_name: participants[0].player?.name,
-                    full_participant: participants[0]
-                });
-            }
-            
-            // Debug pairing structure  
-            if (allPairings.length > 0) {
-                console.log('📋 Pairing structure:', {
-                    white_player_id: allPairings[0].white_player_id,
-                    black_player_id: allPairings[0].black_player_id,
-                    result: allPairings[0].result,
-                    round: allPairings[0].round,
-                    full_pairing: allPairings[0]
-                });
-            }
-            
-            // Calculate results for each player
-            const results = participants.map((participant, index) => {
-                console.log(`\n👤 Processing player ${index + 1}/${participants.length}:`, participant.player.name, `(ID: ${participant.player_id})`);
-                
-                const playerPairings = allPairings.filter(p => {
-                    const isWhitePlayer = p.white_player_id === participant.player_id;
-                    const isBlackPlayer = p.black_player_id === participant.player_id;
-                    const isPlayerInPairing = isWhitePlayer || isBlackPlayer;
-                    
-                    if (index === 0) { // Only log for first player to avoid spam
-                        console.log(`\t�\udfd5 Checking pairing: white=${p.white_player_id}, black=${p.black_player_id}, participant=${participant.player_id}, match=${isPlayerInPairing}`);
-                    }
-                    
-                    return isPlayerInPairing;
-                });
-                
-                console.log(`\ud83c\udfaf Found ${playerPairings.length} pairings for ${participant.player.name}`);
-                if (playerPairings.length > 0) {
-                    console.log('\ud83d\udcdd Sample pairing:', {
-                        round: playerPairings[0].round,
-                        white: playerPairings[0].white_player?.name,
-                        black: playerPairings[0].black_player?.name,
-                        result: playerPairings[0].result
-                    });
-                }
-                
-                let points = 0;
-                let gamesPlayed = 0;
-                const roundResults = [];
-                
-                // Group pairings by round
-                const rounds = {};
-                playerPairings.forEach(pairing => {
-                    if (!rounds[pairing.round]) {
-                        rounds[pairing.round] = [];
-                    }
-                    rounds[pairing.round].push(pairing);
-                });
-                
-                // Calculate points for each round
-                for (let round = 1; round <= (selectedTournamentForResults?.rounds || 1); round++) {
-                    const roundPairings = rounds[round] || [];
-                    console.log(`\t�\udfb2 Round ${round}: ${roundPairings.length} pairings found`);
-                    
-                    let roundPoints = 0;
-                    let opponent = null;
-                    let result = '-';
-                    let color = '';
-                    
-                    if (roundPairings.length > 0) {
-                        const pairing = roundPairings[0];
-                        const isWhite = pairing.white_player_id === participant.player_id;
-                        
-                        color = isWhite ? 'White' : 'Black';
-                        opponent = isWhite ? pairing.black_player : pairing.white_player;
-                        
-                        if (pairing.result) {
-                            gamesPlayed++;
-                            console.log(`\t\t�\udfb9 Game result: ${pairing.result}, Player is ${isWhite ? 'White' : 'Black'}`);
-                            
-                            if (pairing.result === '1/2-1/2') {
-                                roundPoints = 0.5;
-                                result = '½';
-                            } else if (
-                                (isWhite && pairing.result === '1-0') ||
-                                (!isWhite && pairing.result === '0-1')
-                            ) {
-                                roundPoints = 1;
-                                result = '1';
-                            } else {
-                                roundPoints = 0;
-                                result = '0';
-                            }
-                            points += roundPoints;
-                            console.log(`\t\t�\udfaf Round points: ${roundPoints}, Total points: ${points}`);
-                            
-                        } else if (!opponent) {
-                            // Bye
-                            roundPoints = 1;
-                            points += roundPoints;
-                            result = '1';
-                            opponent = { name: 'BYE' };
-                            gamesPlayed++;
-                        }
-                    }
-                    
-                    roundResults.push({
-                        round,
-                        opponent: opponent?.name || '-',
-                        color,
-                        result,
-                        points: roundPoints
-                    });
-                }
-                
-                const playerResult = {
-                    ...participant,
-                    totalPoints: points,
-                    gamesPlayed,
-                    roundResults,
-                    percentage: gamesPlayed > 0 ? (points / gamesPlayed * 100).toFixed(1) : '0.0'
-                };
-                
-                console.log(`\t�\udfc6 Final result for ${participant.player.name}: ${points} points from ${gamesPlayed} games (${playerResult.percentage}%)`);
-                return playerResult;
-            });
-            
-            // Sort by points (descending), then by rating (descending)
-            results.sort((a, b) => {
-                if (b.totalPoints !== a.totalPoints) {
-                    return b.totalPoints - a.totalPoints;
-                }
-                return (b.player?.rating || 0) - (a.player?.rating || 0);
-            });
-            
-            console.log('�\udfc6 Final calculation complete:');
-            console.log('	- Total players processed:', results.length);
-            console.log('	- Players with points:', results.filter(r => r.totalPoints > 0).length);
-            console.log('	- Players with games:', results.filter(r => r.gamesPlayed > 0).length);
-            
-            if (results.length > 0 && results.every(r => r.totalPoints === 0)) {
-                console.warn('⚠️ WARNING: All players have 0 points - possible data issue!');
-                console.log('	- Check if participant player_id matches pairing player IDs');
-                console.log('	- Check if pairings have result field populated');
-            }
-            
-            setTournamentResults(results);
-            setFilteredResults(results);
+            showMessage('Request approved successfully');
+            fetchRequestsOnly(); // Refresh only requests for faster update
         } catch (error) {
-            showMessage('Failed to fetch tournament results', true);
-            console.error('Error fetching tournament results:', error);
+            showMessage(error.response?.data?.error || 'Failed to approve request', true);
+            
+            if (error.response?.status === 401) {
+                localStorage.removeItem('token');
+                navigate('/admin/login');
+            }
         } finally {
-            setLoadingResults(false);
+            setLoading(false);
+        }
+    };
+
+    const handleRejectRequest = async (requestId, playerName, tournamentName) => {
+        const reason = window.prompt(`Reject ${playerName} for ${tournamentName}? (Optional reason):`);
+        if (reason === null) return; // User cancelled
+        
+        try {
+            setLoading(true);
+            const token = localStorage.getItem('token');
+            const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
+            
+            await axios.put(`${API}/tournament-requests/${requestId}`, {
+                action: 'reject',
+                admin_notes: reason || 'No reason provided'
+            }, { headers: authHeaders });
+            
+            showMessage('Request rejected successfully');
+            fetchRequestsOnly(); // Refresh only requests for faster update
+        } catch (error) {
+            showMessage(error.response?.data?.error || 'Failed to reject request', true);
+            
+            if (error.response?.status === 401) {
+                localStorage.removeItem('token');
+                navigate('/admin/login');
+            }
+        } finally {
+            setLoading(false);
         }
     };
     
-    const handlePlayerResultsClick = (player) => {
-        setSelectedPlayer(player);
-        const playerResultsData = tournamentResults.find(r => r.player_id === player.player_id);
-        setPlayerResults(playerResultsData ? [playerResultsData] : []);
-    };
-    
-    const handleSearchChange = (query) => {
-        setSearchQuery(query);
-        if (!query.trim()) {
-            setFilteredResults(tournamentResults);
-        } else {
-            const filtered = tournamentResults.filter(result => 
-                result.player.name.toLowerCase().includes(query.toLowerCase()) ||
-                (result.player.title && result.player.title.toLowerCase().includes(query.toLowerCase()))
-            );
-            setFilteredResults(filtered);
-        }
-    };
 
 
     const renderTournamentDialog = () => (
@@ -912,9 +745,10 @@ const AdminPanel = () => {
                     <div className="grid grid-cols-2 gap-4">
                         <div>
                             <Label htmlFor="start_date">Start Date</Label>
-                            <Input
+<Input
                                 id="start_date"
                                 type="date"
+                                min={todayStr}
                                 value={tournamentForm.start_date}
                                 onChange={(e) => handleTournamentFormChange('start_date', e.target.value)}
                                 className={validationErrors.start_date || validationErrors.dates ? 'border-red-500' : ''}
@@ -926,9 +760,10 @@ const AdminPanel = () => {
                         </div>
                         <div>
                             <Label htmlFor="end_date">End Date</Label>
-                            <Input
+<Input
                                 id="end_date"
                                 type="date"
+                                min={tournamentForm.start_date || todayStr}
                                 value={tournamentForm.end_date}
                                 onChange={(e) => handleTournamentFormChange('end_date', e.target.value)}
                                 className={validationErrors.end_date || validationErrors.dates ? 'border-red-500' : ''}
@@ -939,7 +774,25 @@ const AdminPanel = () => {
                             )}
                         </div>
                     </div>
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-3 gap-4">
+                        <div>
+                            <Label htmlFor="tournament_type">Tournament Type</Label>
+                            <Select 
+                                value={tournamentForm.tournament_type} 
+                                onValueChange={(value) => handleTournamentFormChange('tournament_type', value)}
+                            >
+                                <SelectTrigger className={validationErrors.tournament_type ? 'border-red-500' : ''}>
+                                    <SelectValue placeholder="Select type" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="swiss">Swiss System</SelectItem>
+                                    <SelectItem value="knockout">Knockout</SelectItem>
+                                </SelectContent>
+                            </Select>
+                            {validationErrors.tournament_type && (
+                                <p className="text-sm text-red-600 mt-1">{validationErrors.tournament_type}</p>
+                            )}
+                        </div>
                         <div>
                             <Label htmlFor="rounds">Rounds</Label>
                             <Input
@@ -984,75 +837,81 @@ const AdminPanel = () => {
                             <p className="text-sm text-red-600 mt-1">{validationErrors.arbiter}</p>
                         )}
                     </div>
-                    <div className="grid grid-cols-2 gap-4">
-                        <div>
-                            <Label htmlFor="tournament_type">Tournament Type</Label>
-                            <Select 
-                                value={tournamentForm.tournament_type} 
-                                onValueChange={(value) => handleTournamentFormChange('tournament_type', value)}
-                            >
-                                <SelectTrigger>
-                                    <SelectValue placeholder="Select type" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="swiss">Swiss System</SelectItem>
-                                    <SelectItem value="knockout">Knockout</SelectItem>
-                                    <SelectItem value="round_robin">Round Robin</SelectItem>
-                                </SelectContent>
-                            </Select>
-                        </div>
+                    
+                    {/* Round Elimination Configuration for Knockout Tournaments */}
+                    {tournamentForm.tournament_type === 'knockout' && tournamentForm.rounds && (
                         <div className="space-y-3">
-                            <div className="flex items-center space-x-2">
-                                <input
-                                    type="checkbox"
-                                    id="use_round_specific"
-                                    checked={tournamentForm.use_round_specific}
-                                    onChange={(e) => toggleRoundSpecific(e.target.checked)}
-                                    className="rounded border-gray-300"
-                                />
-                                <Label htmlFor="use_round_specific" className="text-sm font-medium">
-                                    Use round-specific eliminations
-                                </Label>
-                            </div>
-                            
-                            {!tournamentForm.use_round_specific ? (
-                                <div>
-                                    <Label htmlFor="elimination_per_round">Players Eliminated Per Round</Label>
-                                    <Input
-                                        id="elimination_per_round"
-                                        type="number"
-                                        min="0"
-                                        value={tournamentForm.elimination_per_round}
-                                        onChange={(e) => handleTournamentFormChange('elimination_per_round', e.target.value)}
-                                        placeholder="0 = No elimination"
-                                    />
-                                    <p className="text-xs text-gray-500 mt-1">Set to 0 for no elimination. Same for all rounds.</p>
-                                </div>
-                            ) : (
-                                <div>
-                                    <Label>Eliminations by Round</Label>
-                                    {tournamentForm.rounds && parseInt(tournamentForm.rounds) > 0 ? (
-                                        <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto border rounded p-2">
-                                            {tournamentForm.round_eliminations.map((roundElim, index) => (
-                                                <div key={roundElim.round} className="flex items-center space-x-2">
-                                                    <Label className="text-xs min-w-0">R{roundElim.round}:</Label>
-                                                    <Input
-                                                        type="number"
-                                                        min="0"
-                                                        value={roundElim.eliminations}
-                                                        onChange={(e) => handleRoundEliminationChange(roundElim.round, e.target.value)}
-                                                        className="h-8 text-xs"
-                                                        placeholder="0"
-                                                    />
-                                                </div>
-                                            ))}
+                            <Label>Round Eliminations</Label>
+                            <div className="bg-orange-50 border border-orange-200 rounded-md p-3 mb-3">
+                                <div className="flex">
+                                    <div className="flex-shrink-0">
+                                        <svg className="h-5 w-5 text-orange-400" viewBox="0 0 20 20" fill="currentColor">
+                                            <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                                        </svg>
+                                    </div>
+                                    <div className="ml-3">
+                                        <h3 className="text-sm font-medium text-orange-800">
+                                            Knockout Tournament Configuration
+                                        </h3>
+                                        <div className="mt-2 text-sm text-orange-700">
+                                            <p>Configure how many players are eliminated after each round. The final round typically has 0 eliminations (winner determined by game result).</p>
                                         </div>
-                                    ) : (
-                                        <p className="text-xs text-gray-500">Set the number of rounds first to configure eliminations</p>
-                                    )}
-                                    <p className="text-xs text-gray-500 mt-1">Set eliminations for each round individually.</p>
+                                    </div>
                                 </div>
-                            )}
+                            </div>
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                {tournamentForm.round_eliminations.map((roundElim, index) => (
+                                    <div key={index} className="space-y-1">
+                                        <Label className="text-xs font-medium">
+                                            Round {roundElim.round}
+                                            {index === tournamentForm.round_eliminations.length - 1 && (
+                                                <span className="text-gray-500"> (Final)</span>
+                                            )}
+                                        </Label>
+                                        <Input
+                                            type="number"
+                                            min="0"
+                                            max="50"
+                                            value={roundElim.eliminations}
+                                            onChange={(e) => handleRoundEliminationChange(index, e.target.value)}
+                                            className="text-sm"
+                                            placeholder="0"
+                                        />
+                                        <p className="text-xs text-gray-500">
+                                            {index === tournamentForm.round_eliminations.length - 1 
+                                                ? "Players eliminated" 
+                                                : "Eliminated"}
+                                        </p>
+                                    </div>
+                                ))}
+                            </div>
+                            <div className="text-xs text-gray-600 mt-2">
+                                <strong>Tip:</strong> For a proper knockout tournament, ensure the total eliminations across all rounds leaves exactly 1 winner.
+                            </div>
+                        </div>
+                    )}
+                    
+                    <div>
+                        <div className={`${tournamentForm.tournament_type === 'swiss' ? "bg-blue-50 border border-blue-200" : "bg-orange-50 border border-orange-200"} rounded-md p-3`}>
+                            <div className="flex">
+                                <div className="flex-shrink-0">
+                                    <svg className={`h-5 w-5 ${tournamentForm.tournament_type === 'swiss' ? 'text-blue-400' : 'text-orange-400'}`} viewBox="0 0 20 20" fill="currentColor">
+                                        <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                                    </svg>
+                                </div>
+                                <div className="ml-3">
+                                    <h3 className={`text-sm font-medium ${tournamentForm.tournament_type === 'swiss' ? 'text-blue-800' : 'text-orange-800'}`}>
+                                        {tournamentForm.tournament_type === 'swiss' ? 'Swiss Tournament System' : 'Knockout Tournament System'}
+                                    </h3>
+                                    <div className={`mt-2 text-sm ${tournamentForm.tournament_type === 'swiss' ? 'text-blue-700' : 'text-orange-700'}`}>
+                                        <p>
+                                            {tournamentForm.tournament_type === 'swiss' 
+                                                ? 'This tournament will use the Swiss pairing system with color alternation and no eliminations.'
+                                                : 'This tournament will eliminate players after each round according to the configuration above, culminating in a final winner.'}
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                     <div className="flex justify-end space-x-2">
@@ -1206,10 +1065,11 @@ const AdminPanel = () => {
                                                         variant="outline"
                                                         size="sm"
                                                         onClick={() => handleAddSinglePlayer(player.id)}
-                                                        disabled={loading}
+                                                        disabled={loading || tournamentParticipants.some(p => p.player_id === player.id)}
                                                         className="text-green-600 hover:text-green-700"
                                                     >
-                                                        {loading ? 'Adding...' : 'Add'}
+                                                        {loading ? 'Adding...' : 
+                                                         tournamentParticipants.some(p => p.player_id === player.id) ? 'Added' : 'Add'}
                                                     </Button>
                                                 </TableCell>
                                             </TableRow>
@@ -1244,40 +1104,30 @@ const AdminPanel = () => {
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
-                                        {tournamentParticipants.map((participant) => (
-                                                    <TableRow key={participant.id} className={participant.status === 'eliminated' ? 'bg-red-50' : ''}>
-                                                        <TableCell className="font-medium">
-                                                            {participant.player.name}
-                                                            {participant.status === 'eliminated' && (
-                                                                <Badge variant="destructive" className="ml-2 text-xs">Eliminated</Badge>
-                                                            )}
-                                                        </TableCell>
-                                                        <TableCell>{participant.player.rating}</TableCell>
-                                                        <TableCell>
-                                                            <div className="flex space-x-1">
-                                                                {participant.status !== 'eliminated' && (
-                                                                    <Button
-                                                                        variant="outline"
-                                                                        size="sm"
-                                                                        onClick={() => handleEliminatePlayer(selectedTournament.id, participant.player_id)}
-                                                                        className="text-yellow-600 hover:text-yellow-700"
-                                                                        title="Eliminate Player"
-                                                                    >
-                                                                        ⚠️
-                                                                    </Button>
-                                                                )}
-                                                                <Button
-                                                                    variant="outline"
-                                                                    size="sm"
-                                                                    onClick={() => handleRemoveParticipant(selectedTournament.id, participant.player_id)}
-                                                                    className="text-red-600 hover:text-red-700"
-                                                                    title="Remove Player"
-                                                                >
-                                                                    <Trash2 className="h-3 w-3" />
-                                                                </Button>
-                                                            </div>
-                                                        </TableCell>
-                                                    </TableRow>
+                                        {tournamentParticipants
+                                            .filter((participant, index, array) => 
+                                                // Remove duplicates based on player_id
+                                                array.findIndex(p => p.player_id === participant.player_id) === index
+                                            )
+                                            .map((participant, index) => (
+                                            <TableRow key={`participant-${participant.player_id}-${index}`}>
+                                                <TableCell className="font-medium">
+                                                    {participant.player.name}
+                                                </TableCell>
+                                                <TableCell>{participant.player.rating}</TableCell>
+                                                <TableCell>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => handleRemoveParticipant(selectedTournament.id, participant.player_id)}
+                                                        disabled={loading}
+                                                        className="text-red-600 hover:text-red-700"
+                                                        title="Remove Player"
+                                                    >
+                                                        <Trash2 className="h-3 w-3" />
+                                                    </Button>
+                                                </TableCell>
+                                            </TableRow>
                                         ))}
                                     </TableBody>
                                 </Table>
@@ -1360,35 +1210,34 @@ const AdminPanel = () => {
                         Players ({players.length})
                     </button>
                     <button
-                        onClick={() => {
-                            setActiveTab('pairings');
-                            if (pairingTournaments.length === 0) {
-                                fetchTournamentsForPairing();
-                            }
-                        }}
+                        onClick={() => setActiveTab('requests')}
+                        className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                            activeTab === 'requests'
+                                ? 'border-blue-500 text-blue-600'
+                                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                        }`}
+                    >
+                        <Clock className="h-4 w-4 inline mr-2" />
+                        Requests ({requests.filter(r => r.status === 'pending').length})
+                    </button>
+                    <button
+                        onClick={() => setActiveTab('pairings')}
                         className={`py-2 px-1 border-b-2 font-medium text-sm ${
                             activeTab === 'pairings'
                                 ? 'border-blue-500 text-blue-600'
                                 : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
                         }`}
                     >
-                        <Shuffle className="h-4 w-4 inline mr-2" />
                         Pairings
                     </button>
                     <button
-                        onClick={() => {
-                            setActiveTab('results');
-                            if (resultsTournaments.length === 0) {
-                                fetchTournamentsForResults();
-                            }
-                        }}
+                        onClick={() => setActiveTab('results')}
                         className={`py-2 px-1 border-b-2 font-medium text-sm ${
                             activeTab === 'results'
                                 ? 'border-blue-500 text-blue-600'
                                 : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
                         }`}
                     >
-                        <Trophy className="h-4 w-4 inline mr-2" />
                         Results
                     </button>
                 </nav>
@@ -1418,7 +1267,6 @@ const AdminPanel = () => {
                                     <TableHead>Dates</TableHead>
                                     <TableHead>Rounds</TableHead>
                                     <TableHead>Type</TableHead>
-                                    <TableHead>Elimination</TableHead>
                                     <TableHead>Time Control</TableHead>
                                     <TableHead>Players</TableHead>
                                     <TableHead>Actions</TableHead>
@@ -1446,30 +1294,10 @@ const AdminPanel = () => {
                                                 {tournament.tournament_type || 'swiss'}
                                             </Badge>
                                         </TableCell>
-                                        <TableCell>
-                                            {tournament.round_eliminations && tournament.round_eliminations.length > 0 ? (
-                                                <div className="flex flex-wrap gap-1">
-                                                    <Badge variant="destructive" className="text-xs">
-                                                        Round-specific
-                                                    </Badge>
-                                                    {tournament.round_eliminations.some(re => re.eliminations > 0) && (
-                                                        <Badge variant="outline" className="text-xs">
-                                                            {tournament.round_eliminations.filter(re => re.eliminations > 0).length} rounds
-                                                        </Badge>
-                                                    )}
-                                                </div>
-                                            ) : tournament.elimination_per_round > 0 ? (
-                                                <Badge variant="destructive">
-                                                    -{tournament.elimination_per_round}/round
-                                                </Badge>
-                                            ) : (
-                                                <Badge variant="secondary">No elimination</Badge>
-                                            )}
-                                        </TableCell>
                                         <TableCell>{tournament.time_control}</TableCell>
                                         <TableCell>
                                             <Badge variant="outline">
-                                                0 players
+                                                {tournament.participant_count || 0} players
                                             </Badge>
                                         </TableCell>
                                         <TableCell>
@@ -1483,17 +1311,6 @@ const AdminPanel = () => {
                                                 >
                                                     <Users className="h-3 w-3" />
                                                 </Button>
-                                                {tournament.registration?.enabled && (
-                                                    <Button
-                                                        variant="outline"
-                                                        size="sm"
-                                                        onClick={() => navigate(`/tournaments/${tournament.id}/registrations`)}
-                                                        className="text-green-600 hover:text-green-700"
-                                                        title="Manage Registrations"
-                                                    >
-                                                        <Settings className="h-3 w-3" />
-                                                    </Button>
-                                                )}
                                                 <Button
                                                     variant="outline"
                                                     size="sm"
@@ -1592,544 +1409,402 @@ const AdminPanel = () => {
                 </Card>
             )}
 
+            {activeTab === 'requests' && (
+                <Card>
+                    <CardHeader>
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <CardTitle>
+                                    Tournament Join Requests
+                                </CardTitle>
+                                <p className="text-sm text-gray-600 mt-1">
+                                    Manage user requests to join tournaments.
+                                </p>
+                            </div>
+                            <div className="flex items-center space-x-2">
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => fetchRequestsOnly(true)}
+                                    className="text-xs"
+                                    disabled={loading}
+                                >
+                                    🔄 Refresh
+                                </Button>
+                            </div>
+                        </div>
+                    </CardHeader>
+                    <CardContent>
+                        <Table>
+                            <TableHeader>
+                                <TableRow>
+                                    <TableHead>Player</TableHead>
+                                    <TableHead>Tournament</TableHead>
+                                    <TableHead>Rating</TableHead>
+                                    <TableHead>Request Date</TableHead>
+                                    <TableHead>Status</TableHead>
+                                    <TableHead>Actions</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {requests.map((request) => (
+                                    <TableRow key={request.id}>
+                                        <TableCell className="font-medium">
+                                            <div>
+                                                <div>{request.player.name}</div>
+                                                <div className="text-xs text-gray-500">{request.user.email}</div>
+                                            </div>
+                                        </TableCell>
+                                        <TableCell>
+                                            <div>
+                                                <div className="font-medium">{request.tournament.name}</div>
+                                                <div className="text-xs text-gray-500">{request.tournament.location}</div>
+                                            </div>
+                                        </TableCell>
+                                        <TableCell>{request.player.rating}</TableCell>
+                                        <TableCell>{new Date(request.request_date).toLocaleDateString()}</TableCell>
+                                        <TableCell>
+                                            <Badge 
+                                                variant={request.status === 'pending' ? 'secondary' : 
+                                                       request.status === 'approved' ? 'default' : 'destructive'}
+                                                className={request.status === 'pending' ? 'bg-yellow-100 text-yellow-800' : 
+                                                          request.status === 'approved' ? 'bg-green-100 text-green-800' : 
+                                                          'bg-red-100 text-red-800'}
+                                            >
+                                                {request.status === 'pending' && <Clock className="h-3 w-3 mr-1" />}
+                                                {request.status === 'approved' && <CheckCircle className="h-3 w-3 mr-1" />}
+                                                {request.status === 'rejected' && <XCircle className="h-3 w-3 mr-1" />}
+                                                {request.status}
+                                            </Badge>
+                                        </TableCell>
+                                        <TableCell>
+                                            {request.status === 'pending' ? (
+                                                <div className="flex space-x-2">
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => handleApproveRequest(
+                                                            request.id, 
+                                                            request.player.name, 
+                                                            request.tournament.name
+                                                        )}
+                                                        className="text-green-600 hover:text-green-700"
+                                                        disabled={loading}
+                                                        title="Approve Request"
+                                                    >
+                                                        <CheckCircle className="h-3 w-3" />
+                                                    </Button>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => handleRejectRequest(
+                                                            request.id, 
+                                                            request.player.name, 
+                                                            request.tournament.name
+                                                        )}
+                                                        className="text-red-600 hover:text-red-700"
+                                                        disabled={loading}
+                                                        title="Reject Request"
+                                                    >
+                                                        <XCircle className="h-3 w-3" />
+                                                    </Button>
+                                                </div>
+                                            ) : (
+                                                <div className="text-sm text-gray-500">
+                                                    {request.status === 'approved' && 'Approved'}
+                                                    {request.status === 'rejected' && (
+                                                        <span title={request.admin_notes || 'No reason provided'}>
+                                                            Rejected
+                                                        </span>
+                                                    )}
+                                                    {request.approved_date && (
+                                                        <div className="text-xs mt-1">
+                                                            on {new Date(request.approved_date).toLocaleDateString()}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </TableCell>
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                        </Table>
+                        {requests.length === 0 && (
+                            <div className="text-center py-8 text-gray-500">
+                                <Clock className="h-16 w-16 mx-auto mb-4 text-gray-300" />
+                                <h3 className="text-lg font-medium text-gray-900 mb-2">No Requests Yet</h3>
+                                <p>Tournament join requests will appear here when users request to join tournaments.</p>
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
+            )}
+
             {activeTab === 'pairings' && (
                 <Card>
                     <CardHeader className="flex flex-row items-center justify-between">
-                        <CardTitle>Tournament Pairings</CardTitle>
-                        <div className="flex items-center space-x-4">
-                            {selectedTournamentForPairing && (
-                                <div className="flex items-center space-x-4">
-                                    <Button
-                                        variant="outline"
-                                        size="sm"
-                                        onClick={() => {
-                                            if (currentRound > 1) {
-                                                const newRound = currentRound - 1;
-                                                setCurrentRound(newRound);
-                                                fetchRoundPairings(selectedTournamentForPairing.id, newRound);
-                                            }
-                                        }}
-                                        disabled={currentRound <= 1}
-                                    >
-                                        <ChevronLeft className="h-4 w-4" />
-                                    </Button>
-                                    <div className="flex items-center space-x-2">
-                                        <span className="font-medium">Round {currentRound}</span>
-                                        {selectedTournamentForPairing.completed_rounds?.includes(currentRound) && (
-                                            <Badge className="bg-green-100 text-green-800 text-xs">
-                                                ✓ Completed
-                                            </Badge>
-                                        )}
-                                    </div>
-                                    <Button
-                                        variant="outline"
-                                        size="sm"
-                                        onClick={() => {
-                                            if (currentRound < (selectedTournamentForPairing?.rounds || 1)) {
-                                                const newRound = currentRound + 1;
-                                                setCurrentRound(newRound);
-                                                fetchRoundPairings(selectedTournamentForPairing.id, newRound);
-                                            }
-                                        }}
-                                        disabled={currentRound >= (selectedTournamentForPairing?.rounds || 1)}
-                                    >
-                                        <ChevronRight className="h-4 w-4" />
-                                    </Button>
-                                </div>
-                            )}
-                            <div className="flex space-x-2">
-                                <Button
-                                    onClick={handleGeneratePairings}
-                                    disabled={!selectedTournamentForPairing || isGeneratingPairings}
-                                >
-                                    <Shuffle className="h-4 w-4 mr-2" />
-                                    {isGeneratingPairings ? 'Generating...' : 'Generate Pairings'}
-                                </Button>
-                                {roundPairings.length > 0 && (() => {
-                                    const isRoundCompleted = selectedTournamentForPairing?.completed_rounds?.includes(currentRound);
-                                    const incompleteGames = roundPairings.filter(pairing => 
-                                        pairing.black_player && !pairing.result
-                                    ).length;
-                                    
-                                    if (isRoundCompleted) {
-                                        return (
-                                            <Button
-                                                disabled
-                                                className="bg-green-600 text-white opacity-75 cursor-not-allowed"
-                                            >
-                                                <Trophy className="h-4 w-4 mr-2" />
-                                                Round {currentRound} Completed ✓
-                                            </Button>
-                                        );
-                                    }
-                                    
-                                    return (
-                                        <Button
-                                            onClick={handleCompleteRound}
-                                            disabled={!selectedTournamentForPairing || incompleteGames > 0}
-                                            className={incompleteGames > 0 
-                                                ? "bg-gray-400 text-white cursor-not-allowed" 
-                                                : "bg-green-600 hover:bg-green-700 text-white"
-                                            }
-                                            title={incompleteGames > 0 
-                                                ? `${incompleteGames} game(s) need results before completing round` 
-                                                : `Complete Round ${currentRound}`
-                                            }
-                                        >
-                                            <Trophy className="h-4 w-4 mr-2" />
-                                            {incompleteGames > 0 
-                                                ? `${incompleteGames} game(s) pending` 
-                                                : `Complete Round ${currentRound}`
-                                            }
-                                        </Button>
-                                    );
-                                })()}
-                            </div>
-                        </div>
+                        <CardTitle>Pairings</CardTitle>
+                        <Button variant="outline" size="sm" onClick={fetchAllData}>🔄 Refresh</Button>
                     </CardHeader>
                     <CardContent>
-                        {/* Tournament Selection */}
-                        <div className="mb-6">
-                            <Label htmlFor="tournament-select">Select Tournament</Label>
-                            <Select
-                                value={selectedTournamentForPairing?.id?.toString() || ''}
-                                onValueChange={(value) => {
-                                    const tournament = pairingTournaments.find(t => t.id.toString() === value);
-                                    setSelectedTournamentForPairing(tournament);
-                                    setCurrentRound(1);
-                                    if (tournament) {
-                                        fetchRoundPairings(tournament.id, 1);
-                                    } else {
-                                        setRoundPairings([]);
-                                    }
-                                }}
-                            >
-                                <SelectTrigger className="w-full max-w-md">
-                                    <SelectValue placeholder="Select a tournament" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {pairingTournaments.map((tournament) => (
-                                        <SelectItem key={tournament.id} value={tournament.id.toString()}>
-                                            {tournament.name} ({tournament.location})
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-
-                        {/* Round Overview */}
-                        {selectedTournamentForPairing && (
-                            <div className="mb-6 p-4 bg-gray-50 rounded-lg">
-                                <h4 className="text-sm font-medium mb-3">Tournament Progress</h4>
-                                <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-2">
-                                    {Array.from({ length: selectedTournamentForPairing.rounds }, (_, i) => i + 1).map(roundNum => {
-                                        const isCompleted = selectedTournamentForPairing.completed_rounds?.includes(roundNum);
-                                        const isCurrent = roundNum === currentRound;
-                                        return (
-                                            <div
-                                                key={roundNum}
-                                                className={`p-2 rounded text-center text-sm cursor-pointer transition-colors ${
-                                                    isCurrent 
-                                                        ? 'bg-blue-500 text-white' 
-                                                        : isCompleted 
-                                                        ? 'bg-green-500 text-white' 
-                                                        : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                                                }`}
-                                                onClick={() => {
-                                                    setCurrentRound(roundNum);
-                                                    fetchRoundPairings(selectedTournamentForPairing.id, roundNum);
-                                                }}
-                                            >
-                                                <div>R{roundNum}</div>
-                                                <div className="text-xs">
-                                                    {isCompleted ? '✓' : isCurrent ? '●' : '○'}
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                                <div className="flex items-center justify-between mt-3 text-xs text-gray-600">
-                                    <div className="flex space-x-4">
-                                        <span><span className="inline-block w-2 h-2 bg-green-500 rounded mr-1"></span>Completed</span>
-                                        <span><span className="inline-block w-2 h-2 bg-blue-500 rounded mr-1"></span>Current</span>
-                                        <span><span className="inline-block w-2 h-2 bg-gray-300 rounded mr-1"></span>Upcoming</span>
-                                    </div>
-                                    <span>
-                                        {selectedTournamentForPairing.completed_rounds?.length || 0} of {selectedTournamentForPairing.rounds} rounds completed
-                                    </span>
-                                </div>
-                            </div>
-                        )}
-                        
-                        {/* Pairings Display */}
-                        {selectedTournamentForPairing && (
-                            <div>
-                                <div className="mb-4">
-                                    <h3 className="text-lg font-semibold">
-                                        {selectedTournamentForPairing.name} - Round {currentRound}
-                                    </h3>
-                                    <p className="text-gray-600">
-                                        {selectedTournamentForPairing.location} • {selectedTournamentForPairing.time_control}
-                                    </p>
-                                </div>
-
-                                {roundPairings.length > 0 ? (
-                                    <div className="space-y-4">
-                                        {/* Elimination Management */}
-                                        {(() => {
-                                            const currentRoundElimination = selectedTournamentForPairing.round_eliminations?.find(re => re.round === currentRound);
-                                            const eliminationCount = currentRoundElimination ? currentRoundElimination.eliminations : 
-                                                                    selectedTournamentForPairing.elimination_per_round || 0;
-                                            
-                                            return eliminationCount > 0 && (
-                                                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-                                                    <h4 className="text-sm font-medium text-yellow-800 mb-2">
-                                                        🏆 Elimination Round {currentRound} - {eliminationCount} players to be eliminated
-                                                    </h4>
-                                                    <p className="text-xs text-yellow-600">
-                                                        After this round, mark the bottom {eliminationCount} players as eliminated in the participant management section.
-                                                        {selectedTournamentForPairing.round_eliminations && (
-                                                            <span className="block mt-1">
-                                                                Round-specific elimination: {eliminationCount} players this round.
-                                                            </span>
-                                                        )}
-                                                    </p>
-                                                </div>
-                                            );
-                                        })()}
-                                        
-                                        <Table>
-                                            <TableHeader>
-                                                <TableRow>
-                                                    <TableHead className="w-16">Board</TableHead>
-                                                    <TableHead>White</TableHead>
-                                                    <TableHead>Black</TableHead>
-                                                    <TableHead>Result</TableHead>
-                                                    <TableHead className="w-32">Action</TableHead>
-                                                </TableRow>
-                                            </TableHeader>
-                                            <TableBody>
-                                                {roundPairings.map((pairing, index) => (
-                                                    <TableRow key={pairing.id || index}>
-                                                        <TableCell className="font-mono">{index + 1}</TableCell>
-                                                        <TableCell className="font-medium">
-                                                            <div className="flex items-center">
-                                                                <div className="w-3 h-3 bg-white border border-gray-400 rounded-sm mr-2"></div>
-                                                                {pairing.white_player?.name || 'Unknown'}
-                                                                {pairing.white_player?.rating && (
-                                                                    <span className="text-sm text-gray-500 ml-1">({pairing.white_player.rating})</span>
-                                                                )}
+                        <Table>
+                            <TableHeader>
+                                <TableRow>
+                                    <TableHead>Tournament</TableHead>
+                                    <TableHead>Type</TableHead>
+                                    <TableHead>Rounds</TableHead>
+                                    <TableHead>Players</TableHead>
+                                    <TableHead>Actions</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {tournaments.map((t) => {
+                                    const pairingsForT = pairingsMap[t.id] || [];
+                                    const nextRound = getNextRoundNumber(t, pairingsForT);
+                                    const ended = isTournamentEnded(t) || nextRound > (t.rounds || 0);
+                                    const canGenerate = !ended && nextRound <= (t.rounds || 0);
+                                    const genDisabled = generatingPairingsId === t.id || !canGenerate;
+                                    return (
+                                        <React.Fragment key={`pair-row-${t.id}`}>
+                                            <TableRow>
+                                                <TableCell className="font-medium">{t.name}</TableCell>
+                                                <TableCell className="capitalize">{t.tournament_type || 'swiss'}</TableCell>
+                                                <TableCell>{t.rounds}</TableCell>
+                                                <TableCell>{t.participant_count || 0}</TableCell>
+                                                <TableCell>
+                                                    <div className="flex space-x-2">
+                                                        <Button
+                                                            variant="outline"
+                                                            size="sm"
+                                                            onClick={() => togglePairingsExpand(t)}
+                                                            disabled={pairingsLoadingId === t.id}
+                                                        >
+                                                            {pairingsExpanded[t.id] ? 'Hide' : 'View'}
+                                                        </Button>
+                                                        {ended ? (
+                                                            <div className="flex items-center gap-2">
+                                                                <Badge variant="secondary">Tournament ended</Badge>
+                                                                <Button
+                                                                    size="sm"
+                                                                    variant="outline"
+                                                                    onClick={() => goToFinalStandings(t)}
+                                                                >
+                                                                    Final Standings
+                                                                </Button>
                                                             </div>
-                                                        </TableCell>
-                                                        <TableCell>
-                                                            {pairing.black_player ? (
-                                                                <div className="flex items-center">
-                                                                    <div className="w-3 h-3 bg-black rounded-sm mr-2"></div>
-                                                                    {pairing.black_player.name}
-                                                                    {pairing.black_player.rating && (
-                                                                        <span className="text-sm text-gray-500 ml-1">({pairing.black_player.rating})</span>
-                                                                    )}
-                                                                </div>
-                                                            ) : (
-                                                                <Badge variant="secondary">Bye</Badge>
-                                                            )}
-                                                        </TableCell>
-                                                        <TableCell>
-                                                            {pairing.result ? (
-                                                                <Badge 
-                                                                    variant={pairing.result === '1/2-1/2' ? 'secondary' : 'default'}
-                                                                    className={`font-mono ${
-                                                                        pairing.result === '1-0' ? 'bg-green-100 text-green-800' :
-                                                                        pairing.result === '0-1' ? 'bg-red-100 text-red-800' :
-                                                                        'bg-yellow-100 text-yellow-800'
-                                                                    }`}
-                                                                >
-                                                                    {pairing.result}
-                                                                </Badge>
-                                                            ) : (
-                                                                <Badge variant="outline">Pending</Badge>
-                                                            )}
-                                                        </TableCell>
-                                                        <TableCell>
-                                                            {!pairing.black_player ? (
-                                                                <span className="text-sm text-gray-500">Auto 1-0</span>
-                                                            ) : (
-                                                                <Select
-                                                                    value={pairing.result || ''}
-                                                                    onValueChange={(value) => handleResultChange(pairing.id, value)}
-                                                                >
-                                                                    <SelectTrigger className="w-24 h-8">
-                                                                        <SelectValue placeholder="Result" />
-                                                                    </SelectTrigger>
-                                                                    <SelectContent>
-                                                                        <SelectItem value="1-0">1-0</SelectItem>
-                                                                        <SelectItem value="1/2-1/2">1/2-1/2</SelectItem>
-                                                                        <SelectItem value="0-1">0-1</SelectItem>
-                                                                    </SelectContent>
-                                                                </Select>
-                                                            )}
-                                                        </TableCell>
-                                                    </TableRow>
-                                                ))}
-                                            </TableBody>
-                                        </Table>
-                                    </div>
-                                ) : (
-                                    <div className="text-center py-12 bg-gray-50 rounded-lg">
-                                        <Shuffle className="h-8 w-8 text-gray-400 mx-auto mb-2" />
-                                        <p className="text-gray-600 mb-4">No pairings generated for Round {currentRound}</p>
-                                        <Button
-                                            onClick={handleGeneratePairings}
-                                            disabled={isGeneratingPairings}
-                                        >
-                                            <Shuffle className="h-4 w-4 mr-2" />
-                                            {isGeneratingPairings ? 'Generating...' : 'Generate Pairings'}
-                                        </Button>
-                                    </div>
-                                )}
-                            </div>
-                        )}
-
-                        {!selectedTournamentForPairing && (
-                            <div className="text-center py-12 text-gray-500">
-                                <Trophy className="h-8 w-8 mx-auto mb-2 text-gray-400" />
-                                Select a tournament to manage pairings
-                            </div>
+                                                        ) : (
+                                                            <Button
+                                                                size="sm"
+                                                                onClick={() => handleGeneratePairings(t)}
+                                                                disabled={genDisabled}
+                                                                title={canGenerate ? '' : 'All rounds are generated'}
+                                                            >
+                                                                {generatingPairingsId === t.id ? 'Generating...' : `Generate Round ${nextRound}`}
+                                                            </Button>
+                                                        )}
+                                                    </div>
+                                                </TableCell>
+                                            </TableRow>
+                                            {pairingsExpanded[t.id] && (
+                                                <TableRow>
+                                                    <TableCell colSpan={5}>
+                                                        {pairingsForT.length === 0 ? (
+                                                            <div className="text-gray-500 py-4">No pairings yet.</div>
+                                                        ) : (
+                                                            <div className="space-y-4">
+                                                                {[...new Set(pairingsForT.map(p => p.round))].sort((a,b)=>a-b).map((round) => (
+                                                                    <div key={`round-${t.id}-${round}`} className="border rounded p-3">
+                                                                        <div className="flex items-center justify-between mb-2">
+                                                                            <div className="font-medium">Round {round}</div>
+                                                                            <div className="text-sm text-gray-500 flex items-center gap-2">
+                                                                                <span>Boards: {pairingsForT.filter(p => p.round === round).length}</span>
+                                                                                <Button
+                                                                                    variant="outline"
+                                                                                    size="sm"
+                                                                                    onClick={() => handleCompleteRound(t.id, round)}
+                                                                                >
+                                                                                    Complete Round
+                                                                                </Button>
+                                                                            </div>
+                                                                        </div>
+                                                                        <Table>
+                                                                            <TableHeader>
+                                                                                <TableRow>
+                                                                                    <TableHead>Board</TableHead>
+                                                                                    <TableHead>White</TableHead>
+                                                                                    <TableHead>Black</TableHead>
+                                                                                    <TableHead>Result</TableHead>
+                                                                                </TableRow>
+                                                                            </TableHeader>
+                                                                            <TableBody>
+                                                                                {pairingsForT.filter(p => p.round === round).sort((a,b)=>a.board_number-b.board_number).map(p => (
+                                                                                    <TableRow key={p.id}>
+                                                                                        <TableCell>{p.board_number}</TableCell>
+                                                                                        <TableCell>{p.white_player?.name || p.white_player_id}</TableCell>
+                                                                                        <TableCell>{p.black_player ? (p.black_player?.name || p.black_player_id) : <Badge variant="secondary">BYE</Badge>}</TableCell>
+                                                                                        <TableCell>
+                                                                                            {p.black_player ? (
+                                                                                                <div className="flex items-center gap-2">
+<Select
+                                                                                                        value={resultDraft[p.id] ?? p.result}
+                                                                                                        onValueChange={(v) => setResultDraft(prev => ({ ...prev, [p.id]: v }))}
+                                                                                                    >
+                                                                                                        <SelectTrigger className="h-8 w-32 text-sm">
+                                                                                                            <SelectValue placeholder="Set result" />
+                                                                                                        </SelectTrigger>
+                                                                                                        <SelectContent>
+                                                                                                            <SelectItem value="1-0">1-0 (White)</SelectItem>
+                                                                                                            <SelectItem value="1/2-1/2">1/2-1/2 (Draw)</SelectItem>
+                                                                                                            <SelectItem value="0-1">0-1 (Black)</SelectItem>
+                                                                                                        </SelectContent>
+                                                                                                    </Select>
+                                                                                                    <Button
+                                                                                                        size="sm"
+                                                                                                        onClick={() => handleSavePairingResult(t.id, p.id, resultDraft[p.id] ?? p.result)}
+                                                                                                        disabled={savingResultId === p.id || !(resultDraft[p.id] ?? p.result)}
+                                                                                                    >
+                                                                                                        {savingResultId === p.id ? 'Saving...' : (p.result ? 'Update' : 'Save')}
+                                                                                                    </Button>
+                                                                                                </div>
+                                                                                            ) : (
+                                                                                                '1 (bye)'
+                                                                                            )}
+                                                                                        </TableCell>
+                                                                                    </TableRow>
+                                                                                ))}
+                                                                            </TableBody>
+                                                                        </Table>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        )}
+                                                    </TableCell>
+                                                </TableRow>
+                                            )}
+                                        </React.Fragment>
+                                    );
+                                })}
+                            </TableBody>
+                        </Table>
+                        {tournaments.length === 0 && (
+                            <div className="text-center py-8 text-gray-500">No tournaments found.</div>
                         )}
                     </CardContent>
                 </Card>
             )}
-            
-            {/* Results Section */}
+
             {activeTab === 'results' && (
                 <Card>
                     <CardHeader className="flex flex-row items-center justify-between">
-                        <CardTitle>Tournament Results & Standings</CardTitle>
-                        {selectedTournamentForResults && (
-                            <Button
-                                onClick={() => fetchTournamentResults(selectedTournamentForResults.id)}
-                                disabled={loadingResults}
-                                variant="outline"
-                                size="sm"
-                            >
-                                {loadingResults ? 'Refreshing...' : 'Refresh Results'}
-                            </Button>
-                        )}
+                        <CardTitle>Results</CardTitle>
+                        <Button variant="outline" size="sm" onClick={fetchAllData}>🔄 Refresh</Button>
                     </CardHeader>
                     <CardContent>
-                        {/* Tournament Selection */}
-                        <div className="mb-6">
-                            <Label htmlFor="results-tournament-select">Select Tournament</Label>
-                            <Select
-                                value={selectedTournamentForResults?.id?.toString() || ''}
-                                onValueChange={(value) => {
-                                    const tournament = resultsTournaments.find(t => t.id.toString() === value);
-                                    setSelectedTournamentForResults(tournament);
-                                    setSelectedPlayer(null);
-                                    setSearchQuery('');
-                                    if (tournament) {
-                                        fetchTournamentResults(tournament.id);
-                                    } else {
-                                        setTournamentResults([]);
-                                        setFilteredResults([]);
-                                    }
-                                }}
-                            >
-                                <SelectTrigger className="w-full max-w-md">
-                                    <SelectValue placeholder="Select a tournament" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {resultsTournaments.map((tournament) => (
-                                        <SelectItem key={tournament.id} value={tournament.id.toString()}>
-                                            {tournament.name} ({tournament.location})
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-                        
-                        {/* Results Display */}
-                        {selectedTournamentForResults && (
-                            <div>
-                                <div className="mb-4">
-                                    <h3 className="text-lg font-semibold">
-                                        {selectedTournamentForResults.name} - Standings
-                                    </h3>
-                                    <p className="text-gray-600">
-                                        {selectedTournamentForResults.location} • {selectedTournamentForResults.rounds} rounds • {selectedTournamentForResults.time_control}
-                                    </p>
-                                </div>
-                                
-                                {loadingResults ? (
-                                    <div className="text-center py-8">
-                                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto"></div>
-                                        <p className="mt-2 text-gray-600">Loading results...</p>
-                                    </div>
-                                ) : tournamentResults.length > 0 ? (
-                                    <div className="space-y-6">
-                                        {/* Search and Filter */}
-                                        <div className="mb-4">
-                                            <Label htmlFor="player-search">Search Players</Label>
-                                            <Input
-                                                id="player-search"
-                                                placeholder="Search by player name or title..."
-                                                value={searchQuery}
-                                                onChange={(e) => handleSearchChange(e.target.value)}
-                                                className="max-w-md"
-                                            />
-                                        </div>
-                                        
-                                        {/* Overall Standings Table */}
-                                        <div>
-                                            <h4 className="text-md font-medium mb-3">
-                                                Overall Standings {filteredResults.length !== tournamentResults.length && 
-                                                    <span className="text-sm text-gray-500">({filteredResults.length} of {tournamentResults.length})</span>
-                                                }
-                                            </h4>
-                                            <Table>
-                                                <TableHeader>
-                                                    <TableRow>
-                                                        <TableHead className="w-12">Rank</TableHead>
-                                                        <TableHead>Player</TableHead>
-                                                        <TableHead>Rating</TableHead>
-                                                        <TableHead>Points</TableHead>
-                                                        <TableHead>Games</TableHead>
-                                                        <TableHead>%</TableHead>
-                                                        <TableHead>Action</TableHead>
-                                                    </TableRow>
-                                                </TableHeader>
-                                                <TableBody>
-                                                    {filteredResults.map((result, index) => (
-                                                        <TableRow key={result.player_id}>
-                                                            <TableCell className="font-medium">{index + 1}</TableCell>
-                                                            <TableCell>
-                                                                <div>
-                                                                    <div className="font-medium">{result.player.name}</div>
-                                                                    {result.player.title && (
-                                                                        <Badge variant="outline" className="text-xs mt-1">
-                                                                            {result.player.title}
-                                                                        </Badge>
-                                                                    )}
-                                                                </div>
-                                                            </TableCell>
-                                                            <TableCell>{result.player.rating || '-'}</TableCell>
-                                                            <TableCell>
-                                                                <span className="font-mono text-lg">{result.totalPoints}</span>
-                                                            </TableCell>
-                                                            <TableCell>{result.gamesPlayed}</TableCell>
-                                                            <TableCell>{result.percentage}%</TableCell>
-                                                            <TableCell>
+                        <Table>
+                            <TableHeader>
+                                <TableRow>
+                                    <TableHead>Tournament</TableHead>
+                                    <TableHead>Type</TableHead>
+                                    <TableHead>Rounds</TableHead>
+                                    <TableHead>Actions</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {tournaments.map((t) => (
+                                    <React.Fragment key={`res-row-${t.id}`}>
+                                        <TableRow>
+                                            <TableCell className="font-medium">{t.name}</TableCell>
+                                            <TableCell className="capitalize">{t.tournament_type || 'swiss'}</TableCell>
+                                            <TableCell>{t.rounds}</TableCell>
+                                            <TableCell>
+                                                <div className="flex space-x-2">
+                                                    <Button variant="outline" size="sm" onClick={() => toggleResultsExpand(t)}>
+                                                        {resultsExpanded[t.id] ? 'Hide' : 'View'}
+                                                    </Button>
+                                                    <Button
+                                                        size="sm"
+                                                        variant="outline"
+                                                        onClick={() => fetchRoundResults(t.id, t.rounds)}
+                                                        disabled={resultsLoadingKey === `${t.id}:${t.rounds}`}
+                                                    >
+                                                        {resultsLoadingKey === `${t.id}:${t.rounds}` ? 'Loading...' : 'Final Standings'}
+                                                    </Button>
+                                                </div>
+                                            </TableCell>
+                                        </TableRow>
+                                        {resultsExpanded[t.id] && (
+                                            <TableRow>
+                                                <TableCell colSpan={4}>
+                                                    <div className="space-y-4">
+                                                        <div className="flex flex-wrap gap-2 mb-2">
+                                                            {Array.from({ length: t.rounds }, (_, i) => i + 1).map((r) => (
                                                                 <Button
+                                                                    key={`btn-${t.id}-${r}`}
                                                                     variant="outline"
                                                                     size="sm"
-                                                                    onClick={() => handlePlayerResultsClick(result)}
-                                                                    className="text-blue-600 hover:text-blue-700"
+                                                                    onClick={() => fetchRoundResults(t.id, r)}
+                                                                    disabled={resultsLoadingKey === `${t.id}:${r}`}
                                                                 >
-                                                                    View Details
+                                                                    {resultsLoadingKey === `${t.id}:${r}` ? `Round ${r}...` : `Round ${r}`}
                                                                 </Button>
-                                                            </TableCell>
-                                                        </TableRow>
-                                                    ))}
-                                                </TableBody>
-                                            </Table>
-                                        </div>
-                                        
-                                        {/* Individual Player Results */}
-                                        {selectedPlayer && (
-                                            <div className="bg-gray-50 rounded-lg p-6">
-                                                <h4 className="text-md font-medium mb-4">
-                                                    Round-by-Round Results: {selectedPlayer.player.name}
-                                                </h4>
-                                                <Table>
-                                                    <TableHeader>
-                                                        <TableRow>
-                                                            <TableHead>Round</TableHead>
-                                                            <TableHead>Opponent</TableHead>
-                                                            <TableHead>Color</TableHead>
-                                                            <TableHead>Result</TableHead>
-                                                            <TableHead>Points</TableHead>
-                                                        </TableRow>
-                                                    </TableHeader>
-                                                    <TableBody>
-                                                        {selectedPlayer.roundResults.map((roundResult) => (
-                                                            <TableRow key={roundResult.round}>
-                                                                <TableCell className="font-medium">Round {roundResult.round}</TableCell>
-                                                                <TableCell>{roundResult.opponent}</TableCell>
-                                                                <TableCell>
-                                                                    {roundResult.color && (
-                                                                        <div className="flex items-center">
-                                                                            <div className={`w-3 h-3 rounded-sm mr-2 ${
-                                                                                roundResult.color === 'White' ? 'bg-white border border-gray-400' : 'bg-black'
-                                                                            }`}></div>
-                                                                            {roundResult.color}
+                                                            ))}
+                                                        </div>
+                                                        {(resultsCache[t.id] && Object.keys(resultsCache[t.id]).length > 0) ? (
+                                                            Object.keys(resultsCache[t.id]).sort((a,b)=>Number(a)-Number(b)).map((rKey) => {
+                                                                const data = resultsCache[t.id][rKey];
+                                                                if (!data) return null;
+                                                                return (
+                                                                    <div key={`res-${t.id}-${rKey}`} className="border rounded p-3">
+                                                                        <div className="flex items-center justify-between mb-2">
+                                                                            <div className="font-medium">Round {data.round} Standings</div>
+                                                                            <div className="text-sm text-gray-500">Tournament: {data.tournament_name}</div>
                                                                         </div>
-                                                                    )}
-                                                                </TableCell>
-                                                                <TableCell>
-                                                                    <Badge 
-                                                                        variant={roundResult.result === '1' ? 'default' : 
-                                                                                roundResult.result === '½' ? 'secondary' : 'outline'}
-                                                                        className={`font-mono ${
-                                                                            roundResult.result === '1' ? 'bg-green-100 text-green-800' :
-                                                                            roundResult.result === '0' ? 'bg-red-100 text-red-800' :
-                                                                            roundResult.result === '½' ? 'bg-yellow-100 text-yellow-800' : ''
-                                                                        }`}
-                                                                    >
-                                                                        {roundResult.result}
-                                                                    </Badge>
-                                                                </TableCell>
-                                                                <TableCell className="font-mono">
-                                                                    {roundResult.points || 0}
-                                                                </TableCell>
-                                                            </TableRow>
-                                                        ))}
-                                                    </TableBody>
-                                                </Table>
-                                                <div className="mt-4 p-4 bg-blue-50 rounded">
-                                                    <div className="grid grid-cols-3 gap-4 text-sm">
-                                                        <div>
-                                                            <span className="font-medium">Total Points:</span>
-                                                            <span className="ml-2 font-mono text-lg">{selectedPlayer.totalPoints}</span>
-                                                        </div>
-                                                        <div>
-                                                            <span className="font-medium">Games Played:</span>
-                                                            <span className="ml-2">{selectedPlayer.gamesPlayed}</span>
-                                                        </div>
-                                                        <div>
-                                                            <span className="font-medium">Performance:</span>
-                                                            <span className="ml-2">{selectedPlayer.percentage}%</span>
-                                                        </div>
+                                                                        <Table>
+                                                                            <TableHeader>
+                                                                                <TableRow>
+                                                                                    <TableHead>Rank</TableHead>
+                                                                                    <TableHead>Player</TableHead>
+                                                                                    <TableHead>Rating</TableHead>
+                                                                                    <TableHead>Points</TableHead>
+                                                                                    <TableHead>W-D-L</TableHead>
+                                                                                </TableRow>
+                                                                            </TableHeader>
+                                                                            <TableBody>
+                                                                                {data.standings.map((s) => (
+                                                                                    <TableRow key={`${s.player_id}-${data.round}`}>
+                                                                                        <TableCell>{s.rank}</TableCell>
+                                                                                        <TableCell>{s.player_name}</TableCell>
+                                                                                        <TableCell>{s.player_rating}</TableCell>
+                                                                                        <TableCell>{s.points}</TableCell>
+                                                                                        <TableCell>{s.wins}-{s.draws}-{s.losses}</TableCell>
+                                                                                    </TableRow>
+                                                                                ))}
+                                                                            </TableBody>
+                                                                        </Table>
+                                                                        <div className="text-xs text-gray-600 mt-2">
+                                                                            Completed games in round {data.round}: {data.round_summary.completed_games} / {data.round_summary.total_games}
+                                                                        </div>
+                                                                    </div>
+                                                                );
+                                                            })
+                                                        ) : (
+                                                            <div className="text-gray-500 py-2">Select a round to load results.</div>
+                                                        )}
                                                     </div>
-                                                </div>
-                                                <Button
-                                                    variant="outline"
-                                                    onClick={() => setSelectedPlayer(null)}
-                                                    className="mt-4"
-                                                >
-                                                    Close Details
-                                                </Button>
-                                            </div>
+                                                </TableCell>
+                                            </TableRow>
                                         )}
-                                    </div>
-                                ) : (
-                                    <div className="text-center py-12 bg-gray-50 rounded-lg">
-                                        <Trophy className="h-8 w-8 text-gray-400 mx-auto mb-2" />
-                                        <p className="text-gray-600">No results available for this tournament</p>
-                                        <p className="text-sm text-gray-500 mt-1">Results will appear after games are completed</p>
-                                    </div>
-                                )}
-                            </div>
-                        )}
-                        
-                        {!selectedTournamentForResults && (
-                            <div className="text-center py-12 text-gray-500">
-                                <Trophy className="h-8 w-8 mx-auto mb-2 text-gray-400" />
-                                Select a tournament to view results and standings
-                            </div>
+                                    </React.Fragment>
+                                ))}
+                            </TableBody>
+                        </Table>
+                        {tournaments.length === 0 && (
+                            <div className="text-center py-8 text-gray-500">No tournaments found.</div>
                         )}
                     </CardContent>
                 </Card>
             )}
+
 
             {/* Dialogs */}
             {renderTournamentDialog()}

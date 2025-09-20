@@ -3,7 +3,7 @@ import axios from 'axios';
 
 const AuthContext = createContext();
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5000';
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:3001';
 const API = `${BACKEND_URL}/api`;
 
 export const useAuth = () => {
@@ -17,7 +17,7 @@ export const useAuth = () => {
 export const AuthProvider = ({ children }) => {
     const [user, setUser] = useState(null);
     const [loading, setLoading] = useState(true);
-    const [token, setToken] = useState(localStorage.getItem('chess_admin_token'));
+    const [token, setToken] = useState(localStorage.getItem('token'));
 
     // Configure axios interceptor to add token to requests
     useEffect(() => {
@@ -44,7 +44,7 @@ export const AuthProvider = ({ children }) => {
                         message: error.message
                     });
                     // Token is invalid, clear it
-                    localStorage.removeItem('chess_admin_token');
+                    localStorage.removeItem('token');
                     setToken(null);
                     setUser(null);
                 }
@@ -67,7 +67,7 @@ export const AuthProvider = ({ children }) => {
             const { token: newToken, user: userData } = response.data;
             
             // Store token
-            localStorage.setItem('chess_admin_token', newToken);
+            localStorage.setItem('token', newToken);
             setToken(newToken);
             setUser(userData);
             
@@ -87,6 +87,40 @@ export const AuthProvider = ({ children }) => {
         }
     };
 
+    const register = async (name, email, password, playerData = {}) => {
+        console.log('👤 Registration attempt:', { name, email, playerData, backendUrl: API });
+        try {
+            const response = await axios.post(`${API}/auth/register`, {
+                name,
+                email,
+                password,
+                ...playerData
+            });
+            
+            console.log('✅ Registration response:', response.data);
+            const { token: newToken, user: userData } = response.data;
+            
+            // Store token
+            localStorage.setItem('token', newToken);
+            setToken(newToken);
+            setUser(userData);
+            
+            console.log('✅ Registration successful, user set:', userData);
+            return { success: true };
+        } catch (error) {
+            console.error('❌ Registration failed:', {
+                status: error.response?.status,
+                data: error.response?.data,
+                message: error.message,
+                url: `${API}/auth/register`
+            });
+            return {
+                success: false,
+                error: error.response?.data?.error || 'Registration failed'
+            };
+        }
+    };
+
     const logout = async () => {
         try {
             await axios.post(`${API}/auth/logout`);
@@ -94,7 +128,7 @@ export const AuthProvider = ({ children }) => {
             console.error('Logout error:', error);
         } finally {
             // Clear local storage and state regardless of API response
-            localStorage.removeItem('chess_admin_token');
+            localStorage.removeItem('token');
             setToken(null);
             setUser(null);
         }
@@ -105,6 +139,7 @@ export const AuthProvider = ({ children }) => {
         loading,
         isAuthenticated: !!user,
         login,
+        register,
         logout
     };
 
