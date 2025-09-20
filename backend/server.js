@@ -619,36 +619,41 @@ app.post('/api/auth/forgot-password', asyncHandler(async (req, res) => {
         return res.status(400).json(handleValidationError(error));
     }
 
-    const { email } = value;
     const genericResponse = { message: 'If an account with that email exists, you will receive password reset instructions shortly.' };
 
-    // Find the user; return generic response regardless of existence
-    const user = await db.collection('users').findOne({ email });
-    if (!user) {
+    try {
+        const { email } = value;
+
+        // Find the user; return generic response regardless of existence
+        const user = await db.collection('users').findOne({ email });
+        if (user) {
+            const token = uuidv4();
+            const expires = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hour
+
+            await db.collection('users').updateOne(
+                { id: user.id },
+                { $set: { password_reset_token: token, password_reset_expires: expires } }
+            );
+
+            // Send email (no information leakage on failure)
+            try {
+                await mailer.sendPasswordResetEmail(email, token, { frontendUrl: process.env.FRONTEND_URL });
+            } catch (e) {
+                logger.error(`Failed to send password reset email to ${email}: ${e.message}`);
+            }
+
+            // Also log token in non-production for developer convenience
+            if (process.env.NODE_ENV !== 'production') {
+                logger.info(`Password reset token for ${email}: ${token} (expires at ${expires})`);
+            }
+        }
+
+        return res.json(genericResponse);
+    } catch (err) {
+        logger.error('Forgot password flow failed:', err);
+        // Always return generic success to avoid revealing account existence
         return res.json(genericResponse);
     }
-
-    const token = uuidv4();
-    const expires = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hour
-
-    await db.collection('users').updateOne(
-        { id: user.id },
-        { $set: { password_reset_token: token, password_reset_expires: expires } }
-    );
-
-    // Send email (no information leakage on failure)
-    try {
-        await mailer.sendPasswordResetEmail(email, token, { frontendUrl: process.env.FRONTEND_URL });
-    } catch (e) {
-        logger.error(`Failed to send password reset email to ${email}: ${e.message}`);
-    }
-
-    // Also log token in non-production for developer convenience
-    if (process.env.NODE_ENV !== 'production') {
-        logger.info(`Password reset token for ${email}: ${token} (expires at ${expires})`);
-    }
-
-    return res.json(genericResponse);
 }));
 
 /**
@@ -2413,6 +2418,12 @@ app.get('/health', (req, res) => {
         timestamp: new Date().toISOString(),
         service: 'Chess Results API'
     });
+});
+
+// Friendly landing page for root path
+app.get('/', (req, res) => {
+    // Redirect to API docs for convenience in hosted environments (e.g., Render)
+    res.redirect('/api-docs');
 });
 
 // 404 handler
