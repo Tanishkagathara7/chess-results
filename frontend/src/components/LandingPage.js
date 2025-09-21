@@ -19,17 +19,20 @@ const LandingPage = () => {
         <div className="w-full px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
             {/* Left: Logo */}
-            <div className="flex items-center space-x-2">
-              <Trophy className="h-8 w-8 text-amber-500" />
-              <span className="text-xl font-bold text-gray-900">ChessTournaments</span>
+            <div className="flex items-center space-x-2 min-w-0">
+              <Trophy className="h-7 w-7 sm:h-8 sm:w-8 text-amber-500 flex-shrink-0" />
+              <span className="text-lg sm:text-xl font-bold text-gray-900 truncate max-w-[55vw]">
+                ChessTournaments
+              </span>
             </div>
             {/* Right: Auth actions */}
-            <div className="flex items-center gap-3">
-              <Button onClick={() => navigate('/auth')} variant="outline" className="hidden sm:inline-flex border-amber-500 text-amber-800 hover:bg-amber-100">
+            <div className="flex items-center gap-2 sm:gap-3">
+              <Button onClick={() => navigate('/auth')} variant="outline" className="hidden sm:inline-flex border-amber-500 text-amber-800 hover:bg-amber-100 whitespace-nowrap">
                 Sign In
               </Button>
-              <Button onClick={handleGetStarted} className="bg-amber-600 hover:bg-amber-700">
-                Create Account
+              <Button onClick={handleGetStarted} className="bg-amber-600 hover:bg-amber-700 px-3 py-2 text-sm sm:px-4 sm:py-2 sm:text-base whitespace-nowrap">
+                <span className="sm:hidden">Create</span>
+                <span className="hidden sm:inline">Create Account</span>
               </Button>
             </div>
           </div>

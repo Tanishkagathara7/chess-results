@@ -42,12 +42,12 @@ const Header = ({ searchQuery, setSearchQuery, onSearch, showAuthButton = false 
 
   return (
     <header className="bg-gradient-to-b from-amber-50/70 via-white/90 to-white/90 border-b-2 border-amber-300/40 shadow-sm">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16">
-          <div className="flex items-center space-x-8">
-            <Link to="/home" className="flex items-center space-x-2">
-              <Trophy className="h-8 w-8 text-amber-600" />
-              <span className="text-xl font-bold text-gray-900">ChessTournaments</span>
+          <div className="flex items-center space-x-3 sm:space-x-8 min-w-0">
+            <Link to="/home" className="flex items-center space-x-2 min-w-0">
+              <Trophy className="h-7 w-7 sm:h-8 sm:w-8 text-amber-600 flex-shrink-0" />
+              <span className="text-lg sm:text-xl font-bold text-gray-900 truncate max-w-[55vw]">ChessTournaments</span>
             </Link>
             <nav className="hidden md:flex space-x-6">
               <Link to="/home" className="text-gray-600 hover:text-amber-700 font-medium">Home</Link>
@@ -59,8 +59,8 @@ const Header = ({ searchQuery, setSearchQuery, onSearch, showAuthButton = false 
               )}
             </nav>
           </div>
-          <div className="flex items-center space-x-4">
-            <div className="relative max-w-md">
+          <div className="flex items-center space-x-2 sm:space-x-4">
+            <div className="relative max-w-md hidden sm:block">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
               <Input
                 type="text"
@@ -71,7 +71,7 @@ const Header = ({ searchQuery, setSearchQuery, onSearch, showAuthButton = false 
                 className="pl-10 w-64"
               />
             </div>
-            <Button onClick={onSearch} variant="outline" size="sm" className="border-amber-400 text-amber-700 hover:bg-amber-50">
+            <Button onClick={onSearch} variant="outline" size="sm" className="border-amber-400 text-amber-700 hover:bg-amber-50 hidden sm:inline-flex">
               Search
             </Button>
             {showAuthButton && isAuthenticated && (
