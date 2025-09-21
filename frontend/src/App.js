@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import "./App.css";
 import { BrowserRouter, Routes, Route, Link, useNavigate, useParams } from "react-router-dom";
 import axios from "axios";
-import { Search, Trophy, Users, Globe, Plus, Edit, Trash2, Download, LogOut, Award, Home as HomeIcon, Settings, Eye, Menu, Bell, Info, ArrowLeft } from "lucide-react";
+import { Search, Trophy, Users, Globe, Plus, Edit, Trash2, Download, LogOut, Award, Home as HomeIcon, Settings, Eye, Menu, Bell, Info, ArrowLeft, Filter } from "lucide-react";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { NotificationProvider } from "./contexts/NotificationContext";
 import NotificationDropdown from "./components/NotificationDropdown";
@@ -94,43 +94,95 @@ const Header = ({ searchQuery, setSearchQuery, onSearch, showAuthButton = false 
 // Sidebar for dashboard
 const Sidebar = ({ open, setOpen, onNavigate, current = 'home' }) => {
   const { theme } = useTheme();
-  const { user } = useAuth();
-  const asideBg = theme === 'light' ? 'bg-white/90 border-slate-200' : 'bg-slate-900/95 border-slate-800';
-  const headerText = theme === 'light' ? 'text-slate-900' : 'text-slate-100';
-  const navDefault = theme === 'light' ? 'text-slate-700 hover:bg-slate-100 hover:text-slate-900' : 'text-slate-300 hover:bg-slate-800 hover:text-slate-100';
-  const navActive = theme === 'light' ? 'bg-amber-500/10 text-amber-700' : 'bg-amber-500/15 text-amber-400';
-  const borderColor = theme === 'light' ? 'border-slate-200' : 'border-slate-800';
-  const iconColor = theme === 'light' ? 'text-slate-500 hover:text-slate-700' : 'text-slate-400 hover:text-slate-200';
+  const { user, logout } = useAuth();
+  const asideBg = theme === 'light' 
+    ? 'bg-gradient-to-br from-slate-50 via-white to-blue-50 border-slate-200/50 shadow-2xl shadow-slate-200/30' 
+    : 'bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 border-gray-700/50 shadow-2xl shadow-black/40';
+  const headerText = theme === 'light' ? 'text-slate-800' : 'text-gray-100';
+  const navDefault = theme === 'light' 
+    ? 'text-slate-600 hover:text-slate-800 hover:bg-slate-100/80' 
+    : 'text-gray-300 hover:text-gray-100 hover:bg-gray-800/80';
+  const borderColor = theme === 'light' ? 'border-slate-200/50' : 'border-gray-700/50';
+  const subtleText = theme === 'light' ? 'text-slate-500' : 'text-gray-400';
+  
   const items = [
-    { key: 'home', label: 'Home', icon: HomeIcon, to: '/home' },
-    { key: 'tournaments', label: 'Tournaments', icon: Trophy, to: '/tournaments' },
+    { key: 'home', label: 'Home', icon: HomeIcon, to: '/home', gradient: 'from-orange-500 to-amber-500', bgGradient: 'from-orange-500/10 to-amber-500/10', textColor: 'text-orange-700', darkTextColor: 'text-orange-400', borderColor: 'border-orange-200/50', darkBorderColor: 'border-orange-500/30', shadowColor: 'shadow-orange-100/50', darkShadowColor: 'shadow-orange-900/20' },
+    { key: 'tournaments', label: 'Tournaments', icon: Trophy, to: '/tournaments', gradient: 'from-blue-500 to-indigo-500', bgGradient: 'from-blue-500/10 to-indigo-500/10', textColor: 'text-blue-700', darkTextColor: 'text-blue-400', borderColor: 'border-blue-200/50', darkBorderColor: 'border-blue-500/30', shadowColor: 'shadow-blue-100/50', darkShadowColor: 'shadow-blue-900/20' },
     ...(user?.role === 'admin'
-      ? [{ key: 'admin', label: 'Admin', icon: Award, to: '/admin' }]
-      : [{ key: 'profile', label: 'Profile', icon: Users, to: '/profile' }]),
-    { key: 'notifications', label: 'Notifications', icon: Bell, to: '/notifications' },
-    { key: 'about', label: 'About', icon: Info, to: '/about' },
-    { key: 'settings', label: 'Settings', icon: Settings, to: '/settings' },
+      ? [{ key: 'admin', label: 'Admin', icon: Award, to: '/admin', gradient: 'from-purple-500 to-pink-500', bgGradient: 'from-purple-500/10 to-pink-500/10', textColor: 'text-purple-700', darkTextColor: 'text-purple-400', borderColor: 'border-purple-200/50', darkBorderColor: 'border-purple-500/30', shadowColor: 'shadow-purple-100/50', darkShadowColor: 'shadow-purple-900/20' }]
+      : [{ key: 'profile', label: 'Profile', icon: Users, to: '/profile', gradient: 'from-emerald-500 to-teal-500', bgGradient: 'from-emerald-500/10 to-teal-500/10', textColor: 'text-emerald-700', darkTextColor: 'text-emerald-400', borderColor: 'border-emerald-200/50', darkBorderColor: 'border-emerald-500/30', shadowColor: 'shadow-emerald-100/50', darkShadowColor: 'shadow-emerald-900/20' }]),
+    { key: 'notifications', label: 'Notifications', icon: Bell, to: '/notifications', gradient: 'from-violet-500 to-purple-500', bgGradient: 'from-violet-500/10 to-purple-500/10', textColor: 'text-violet-700', darkTextColor: 'text-violet-400', borderColor: 'border-violet-200/50', darkBorderColor: 'border-violet-500/30', shadowColor: 'shadow-violet-100/50', darkShadowColor: 'shadow-violet-900/20' },
+    { key: 'about', label: 'About', icon: Info, to: '/about', gradient: 'from-slate-500 to-gray-500', bgGradient: 'from-slate-500/10 to-gray-500/10', textColor: 'text-slate-700', darkTextColor: 'text-slate-400', borderColor: 'border-slate-200/50', darkBorderColor: 'border-slate-500/30', shadowColor: 'shadow-slate-100/50', darkShadowColor: 'shadow-slate-900/20' },
+    { key: 'settings', label: 'Settings', icon: Settings, to: '/settings', gradient: 'from-gray-500 to-slate-500', bgGradient: 'from-gray-500/10 to-slate-500/10', textColor: 'text-gray-700', darkTextColor: 'text-gray-400', borderColor: 'border-gray-200/50', darkBorderColor: 'border-gray-500/30', shadowColor: 'shadow-gray-100/50', darkShadowColor: 'shadow-gray-900/20' },
   ];
+  
   return (
-    <aside className={`fixed z-40 inset-y-0 left-0 w-64 transform ${asideBg} backdrop-blur border-r transition-transform duration-300 ${open ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0`}>
-      <div className={`h-16 flex items-center px-4 border-b ${borderColor}`}>
-        <div className="flex items-center space-x-2">
-          <Trophy className="h-6 w-6 text-amber-500" />
-          <span className={`text-lg font-bold ${headerText}`}>ChessTournaments</span>
+    <aside className={`fixed z-40 inset-y-0 left-0 w-64 transform ${asideBg} backdrop-blur-xl border-r rounded-r-2xl transition-all duration-300 hover:shadow-3xl ${theme === 'light' ? 'hover:shadow-slate-200/40' : 'hover:shadow-black/50'} ${open ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0`}>
+      {/* Header */}
+      <div className={`h-16 flex items-center px-5 border-b ${borderColor}`}>
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 via-orange-500 to-red-500 flex items-center justify-center shadow-lg shadow-orange-200/50 ring-2 ring-white/20">
+            <Trophy className="h-5 w-5 text-white drop-shadow-sm" />
+          </div>
+          <div>
+            <span className={`text-base font-bold ${headerText} tracking-tight`}>ChessTournaments</span>
+            <div className="flex items-center gap-1 mt-0.5">
+              <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></div>
+              <span className="text-[10px] font-medium text-green-600 uppercase tracking-wider">Online</span>
+            </div>
+          </div>
         </div>
       </div>
-      <nav className="p-4 space-y-1">
-        {items.map(item => (
-          <button key={item.key} onClick={() => { onNavigate(item.to); setOpen(false); }} className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-left transition-colors ${current === item.key ? navActive : navDefault}`}>
-            <item.icon className="h-5 w-5" />
-            <span className="font-medium">{item.label}</span>
+      
+      {/* Navigation */}
+      <nav className="p-4 space-y-2">
+        {items.map(item => {
+          const isActive = current === item.key;
+          const activeClasses = theme === 'light'
+            ? `bg-gradient-to-r ${item.bgGradient} ${item.textColor} border ${item.borderColor} shadow-lg ${item.shadowColor}`
+            : `bg-gradient-to-r ${item.bgGradient} ${item.darkTextColor} border ${item.darkBorderColor} shadow-lg ${item.darkShadowColor}`;
+          
+          return (
+            <button 
+              key={item.key} 
+              onClick={() => { onNavigate(item.to); setOpen(false); }} 
+              className={`group w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 hover:shadow-md ${
+                isActive ? activeClasses : navDefault
+              }`}
+            >
+              <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
+                isActive 
+                  ? `bg-gradient-to-br ${item.gradient} text-white`
+                  : theme === 'light' 
+                    ? 'bg-slate-200/80 text-slate-600 group-hover:bg-slate-300' 
+                    : 'bg-gray-700 text-gray-300 group-hover:bg-gray-600'
+              }`}>
+                <item.icon className="h-4 w-4" />
+              </div>
+              <span>{item.label}</span>
+            </button>
+          );
+        })}
+        
+        {/* Logout Section */}
+        <div className={`pt-4 mt-4 border-t ${borderColor}`}>
+          <button 
+            onClick={() => { logout(); setOpen(false); }} 
+            className={`group w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 hover:shadow-md ${navDefault} hover:bg-red-50 hover:text-red-600`}
+          >
+            <div className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-colors bg-slate-200/80 text-slate-600 group-hover:bg-red-100 group-hover:text-red-600">
+              <LogOut className="h-4 w-4" />
+            </div>
+            <span>Logout</span>
           </button>
-        ))}
-        <div className={`pt-2 mt-2 border-t ${borderColor}`}>
-          <button onClick={() => { onNavigate('/auth'); setOpen(false); }} className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-left ${navDefault}`}>
-            <LogOut className="h-5 w-5" />
-            <span className="font-medium">Logout</span>
-          </button>
+        </div>
+        
+        {/* Footer */}
+        <div className="pt-4 mt-4">
+          <div className={`flex items-center justify-center gap-1 text-xs ${subtleText}`}>
+            <Trophy className="h-3 w-3" />
+            <span>Chess Results</span>
+          </div>
         </div>
       </nav>
     </aside>
@@ -309,10 +361,17 @@ const Tournaments = () => {
   const zebra = theme === 'light' ? 'odd:bg-white even:bg-slate-50 hover:bg-slate-100' : 'odd:bg-slate-800/40 even:bg-slate-800/20 hover:bg-slate-700/40';
   const textSubtle = theme === 'light' ? 'text-slate-600' : 'text-slate-200/90';
   const [tournaments, setTournaments] = useState([]);
+  const [allTournaments, setAllTournaments] = useState([]); // Store original list for filtering
   const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState('all'); // all, upcoming, ongoing, ended
+  const [locationFilter, setLocationFilter] = useState('all');
+  const [sortBy, setSortBy] = useState('date'); // date, name, rounds
+  const [sortOrder, setSortOrder] = useState('asc'); // asc, desc
   const [loading, setLoading] = useState(false);
+  const [searchLoading, setSearchLoading] = useState(false);
   const [joinStatus, setJoinStatus] = useState({});
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
   const navigate = useNavigate();
   const { user } = useAuth();
 
@@ -329,10 +388,14 @@ const Tournaments = () => {
 
   const fetchTournaments = async () => {
     try {
+      setLoading(true);
       const response = await axios.get(`${API}/tournaments`);
+      setAllTournaments(response.data);
       setTournaments(response.data);
     } catch (error) {
       console.error("Error fetching tournaments:", error);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -417,19 +480,110 @@ const Tournaments = () => {
     }
   };
 
+  // Get unique locations for filter dropdown
+  const uniqueLocations = React.useMemo(() => {
+    const locations = [...new Set(allTournaments.map(t => t.location).filter(Boolean))];
+    return locations.sort();
+  }, [allTournaments]);
+
+  // Apply filters and search
+  const applyFilters = React.useCallback(() => {
+    let filtered = [...allTournaments];
+    
+    // Text search across name, location, arbiter
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      filtered = filtered.filter(t => 
+        t.name.toLowerCase().includes(query) ||
+        t.location.toLowerCase().includes(query) ||
+        (t.arbiter && t.arbiter.toLowerCase().includes(query)) ||
+        (t.time_control && t.time_control.toLowerCase().includes(query))
+      );
+    }
+    
+    // Status filter
+    if (statusFilter !== 'all') {
+      const now = new Date();
+      filtered = filtered.filter(t => {
+        const startDate = new Date(t.start_date);
+        const endDate = new Date(t.end_date);
+        const isStarted = now >= startDate;
+        const isEnded = now > endDate || t.tournament_over === true;
+        
+        switch (statusFilter) {
+          case 'upcoming':
+            return !isStarted;
+          case 'ongoing':
+            return isStarted && !isEnded;
+          case 'ended':
+            return isEnded;
+          default:
+            return true;
+        }
+      });
+    }
+    
+    // Location filter
+    if (locationFilter !== 'all') {
+      filtered = filtered.filter(t => t.location === locationFilter);
+    }
+    
+    // Sorting
+    filtered.sort((a, b) => {
+      let aVal, bVal;
+      
+      switch (sortBy) {
+        case 'name':
+          aVal = a.name.toLowerCase();
+          bVal = b.name.toLowerCase();
+          break;
+        case 'rounds':
+          aVal = a.rounds || 0;
+          bVal = b.rounds || 0;
+          break;
+        case 'date':
+        default:
+          aVal = new Date(a.start_date).getTime();
+          bVal = new Date(b.start_date).getTime();
+          break;
+      }
+      
+      if (sortOrder === 'desc') {
+        return aVal > bVal ? -1 : aVal < bVal ? 1 : 0;
+      }
+      return aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
+    });
+    
+    setTournaments(filtered);
+  }, [allTournaments, searchQuery, statusFilter, locationFilter, sortBy, sortOrder]);
+
+  // Apply filters whenever dependencies change
+  useEffect(() => {
+    if (allTournaments.length > 0) {
+      applyFilters();
+    }
+  }, [applyFilters]);
+
   const handleSearch = async () => {
-    if (!searchQuery.trim()) {
-      fetchTournaments();
+    if (!searchQuery.trim() && statusFilter === 'all' && locationFilter === 'all') {
+      setTournaments(allTournaments);
       return;
     }
     
-    try {
-      const response = await axios.get(`${API}/tournaments?search=${encodeURIComponent(searchQuery)}`);
-      setTournaments(response.data);
-      // Note: checkUserRegistrations will be called automatically by useEffect when tournaments change
-    } catch (error) {
-      console.error("Error searching tournaments:", error);
-    }
+    setSearchLoading(true);
+    // Apply local filtering (no need for server search unless you want server-side search)
+    setTimeout(() => {
+      applyFilters();
+      setSearchLoading(false);
+    }, 300);
+  };
+
+  const clearFilters = () => {
+    setSearchQuery('');
+    setStatusFilter('all');
+    setLocationFilter('all');
+    setSortBy('date');
+    setSortOrder('asc');
   };
 
   const handleJoinTournament = async (tournamentId) => {
@@ -572,21 +726,148 @@ const Tournaments = () => {
         </div>
 
         <main className="px-6 md:px-10 py-8">
-          <div className="mb-4">
-            <h1 className="text-3xl font-bold">Tournaments</h1>
-            <div className="mt-4 flex items-center gap-3">
-              <div className="relative w-full max-w-xl">
-                <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 h-5 w-5" />
-                <Input
-                  type="text"
-                  placeholder="Search tournaments..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
-                  className="pl-12 pr-4 py-6 rounded-full bg-slate-800/70 border-slate-700 text-slate-100 placeholder:text-slate-400"
-                />
+          <div className="mb-6">
+            <div className="flex items-center justify-between mb-4">
+              <h1 className="text-3xl font-bold">Tournaments</h1>
+              <div className="flex items-center gap-3">
+                <Button
+                  variant="outline" 
+                  size="sm"
+                  onClick={() => setShowFilters(!showFilters)}
+                  className={`${theme === 'light' ? 'border-slate-300 hover:bg-slate-50' : 'border-slate-600 hover:bg-slate-800'}`}
+                >
+                  <Settings className="h-4 w-4 mr-2" />
+                  {showFilters ? 'Hide Filters' : 'Show Filters'}
+                </Button>
+                {(statusFilter !== 'all' || locationFilter !== 'all' || searchQuery) && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={clearFilters}
+                    className="text-amber-400 hover:bg-amber-500/10"
+                  >
+                    Clear All
+                  </Button>
+                )}
               </div>
-              <Button onClick={handleSearch} className="rounded-full bg-amber-600 hover:bg-amber-700">Search</Button>
+            </div>
+
+            {/* Enhanced Search Bar */}
+            <div className="space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="relative flex-1 max-w-2xl">
+                  <Search className={`absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 ${searchLoading ? 'animate-pulse' : ''} ${theme === 'light' ? 'text-slate-400' : 'text-slate-400'}`} />
+                  <Input
+                    type="text"
+                    placeholder="Search tournaments by name, location, arbiter, or time control..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
+                    className={`pl-12 pr-4 py-3 rounded-xl ${theme === 'light' ? 'bg-white border-slate-300 text-slate-900 placeholder:text-slate-500' : 'bg-slate-800/70 border-slate-700 text-slate-100 placeholder:text-slate-400'} focus:ring-2 focus:ring-amber-500 transition-all`}
+                  />
+                  {searchLoading && (
+                    <div className="absolute right-4 top-1/2 -translate-y-1/2">
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-amber-600"></div>
+                    </div>
+                  )}
+                </div>
+                <Button 
+                  onClick={handleSearch} 
+                  className="px-6 py-3 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-medium transition-colors"
+                  disabled={searchLoading}
+                >
+                  {searchLoading ? 'Searching...' : 'Search'}
+                </Button>
+              </div>
+
+              {/* Advanced Filters */}
+              {showFilters && (
+                <Card className={`${cardBg} rounded-xl border`}>
+                  <CardContent className="p-4">
+                    <div className="grid md:grid-cols-4 gap-4">
+                      {/* Status Filter */}
+                      <div>
+                        <Label className="text-sm font-medium mb-2 block">Status</Label>
+                        <Select value={statusFilter} onValueChange={setStatusFilter}>
+                          <SelectTrigger className={`${theme === 'light' ? 'bg-white border-slate-300' : 'bg-slate-800 border-slate-600'}`}>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="all">All Tournaments</SelectItem>
+                            <SelectItem value="upcoming">📅 Upcoming</SelectItem>
+                            <SelectItem value="ongoing">⚡ Ongoing</SelectItem>
+                            <SelectItem value="ended">🏁 Ended</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      {/* Location Filter */}
+                      <div>
+                        <Label className="text-sm font-medium mb-2 block">Location</Label>
+                        <Select value={locationFilter} onValueChange={setLocationFilter}>
+                          <SelectTrigger className={`${theme === 'light' ? 'bg-white border-slate-300' : 'bg-slate-800 border-slate-600'}`}>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="all">All Locations</SelectItem>
+                            {uniqueLocations.map(location => (
+                              <SelectItem key={location} value={location}>
+                                🌍 {location}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      {/* Sort By */}
+                      <div>
+                        <Label className="text-sm font-medium mb-2 block">Sort By</Label>
+                        <Select value={sortBy} onValueChange={setSortBy}>
+                          <SelectTrigger className={`${theme === 'light' ? 'bg-white border-slate-300' : 'bg-slate-800 border-slate-600'}`}>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="date">📅 Start Date</SelectItem>
+                            <SelectItem value="name">🔤 Name</SelectItem>
+                            <SelectItem value="rounds">🎯 Rounds</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      {/* Sort Order */}
+                      <div>
+                        <Label className="text-sm font-medium mb-2 block">Order</Label>
+                        <Select value={sortOrder} onValueChange={setSortOrder}>
+                          <SelectTrigger className={`${theme === 'light' ? 'bg-white border-slate-300' : 'bg-slate-800 border-slate-600'}`}>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="asc">⬆️ Ascending</SelectItem>
+                            <SelectItem value="desc">⬇️ Descending</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Results Summary */}
+              <div className="flex items-center justify-between text-sm">
+                <div className={`${textSubtle}`}>
+                  Showing {tournaments.length} of {allTournaments.length} tournaments
+                  {searchQuery && (
+                    <span> for "<span className="font-medium text-amber-600">{searchQuery}</span>"
+                    </span>
+                  )}
+                </div>
+                {loading && (
+                  <div className="flex items-center gap-2">
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-amber-600"></div>
+                    <span className={textSubtle}>Loading...</span>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
@@ -719,8 +1000,29 @@ const Tournaments = () => {
                 </TableBody>
               </Table>
               {tournaments.length === 0 && (
-                <div className={`text-center py-8 ${textSubtle} opacity-75`}>
-                  No tournaments found.
+                <div className={`text-center py-12 ${textSubtle}`}>
+                  <Search className="h-16 w-16 mx-auto mb-4 opacity-50" />
+                  <h3 className="text-lg font-medium mb-2">
+                    {searchQuery || statusFilter !== 'all' || locationFilter !== 'all' 
+                      ? 'No tournaments match your search' 
+                      : 'No tournaments found'
+                    }
+                  </h3>
+                  <p className="mb-4">
+                    {searchQuery || statusFilter !== 'all' || locationFilter !== 'all'
+                      ? 'Try adjusting your filters or search terms to find more tournaments.'
+                      : 'There are currently no tournaments available. Check back later!'
+                    }
+                  </p>
+                  {(searchQuery || statusFilter !== 'all' || locationFilter !== 'all') && (
+                    <Button
+                      variant="outline"
+                      onClick={clearFilters}
+                      className="text-amber-400 border-amber-400 hover:bg-amber-500/10"
+                    >
+                      Clear Filters
+                    </Button>
+                  )}
                 </div>
               )}
             </CardContent>

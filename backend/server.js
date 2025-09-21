@@ -1030,6 +1030,22 @@ app.post('/api/tournaments/:tournament_id/participants', authenticateToken, asyn
             await db.collection('notifications').insertOne(notification);
             notificationSent = true;
             console.log(`✅ Created admin-added notification for user:`, userToNotify.email);
+            
+            // Send tournament details email if user has an email
+            if (userToNotify.email) {
+                try {
+                    await mailer.sendTournamentDetailsEmail(
+                        userToNotify.email,
+                        tournament,
+                        player,
+                        { isAdminAdded: true }
+                    );
+                    console.log(`✅ Sent tournament details email (admin-added) to:`, userToNotify.email);
+                } catch (emailError) {
+                    console.warn('⚠️ Failed to send tournament details email:', emailError.message);
+                    // Don't fail the request if email fails
+                }
+            }
         } else {
             console.log('ℹ️ No associated user found for player; notification not sent');
         }
@@ -1819,6 +1835,195 @@ app.get('/api/tournaments/:tournament_id/rounds/:round/results', asyncHandler(as
     }
 }));
 
+// Function to send tournament results emails to all participants
+async function sendTournamentResultsEmails(tournament_id) {
+    console.log(`📧 Starting to send tournament results emails for tournament: ${tournament_id}`);
+    
+    // Get tournament details
+    const tournament = await db.collection('tournaments').findOne({ id: tournament_id });
+    if (!tournament) {
+        throw new Error('Tournament not found');
+    }
+    
+    // Get final standings by calling the results API internally
+    const finalRound = tournament.last_completed_round || tournament.rounds;
+    
+    // Get all participants with their user information
+    const participants = await db.collection('tournament_participants').aggregate([
+        { 
+            $match: { 
+                tournament_id, 
+                status: { $ne: 'withdrawn' } 
+            } 
+        },
+        {
+            $lookup: {
+                from: 'players',
+                localField: 'player_id',
+                foreignField: 'id',
+                as: 'player'
+            }
+        },
+        { $unwind: '$player' }
+    ]).toArray();
+    
+    // Calculate standings manually (similar to results endpoint)
+    const playerStats = new Map();
+    participants.forEach(participant => {
+        playerStats.set(participant.player_id, {
+            player_id: participant.player_id,
+            player_name: participant.player.name,
+            player_rating: participant.player.rating,
+            points: 0,
+            wins: 0,
+            draws: 0,
+            losses: 0,
+            status: participant.status
+        });
+    });
+    
+    // Get all tournament pairings to calculate final results
+    const allPairings = await db.collection('pairings').find({
+        tournament_id
+    }).toArray();
+    
+    // Calculate results from pairings
+    allPairings.forEach(pairing => {
+        const whiteId = pairing.white_player_id;
+        const blackId = pairing.black_player_id;
+        const result = pairing.result;
+        
+        if (whiteId && playerStats.has(whiteId)) {
+            const whiteStat = playerStats.get(whiteId);
+            if (result === '1-0') {
+                whiteStat.points += 1;
+                whiteStat.wins++;
+            } else if (result === '1/2-1/2') {
+                whiteStat.points += 0.5;
+                whiteStat.draws++;
+            } else if (result === '0-1') {
+                whiteStat.losses++;
+            } else if (!blackId) { // bye
+                whiteStat.points += 1;
+            }
+        }
+        
+        if (blackId && playerStats.has(blackId)) {
+            const blackStat = playerStats.get(blackId);
+            if (result === '0-1') {
+                blackStat.points += 1;
+                blackStat.wins++;
+            } else if (result === '1/2-1/2') {
+                blackStat.points += 0.5;
+                blackStat.draws++;
+            } else if (result === '1-0') {
+                blackStat.losses++;
+            }
+        }
+    });
+    
+    // Create final standings
+    const standings = Array.from(playerStats.values())
+        .sort((a, b) => {
+            if (b.points !== a.points) return b.points - a.points;
+            return (b.player_rating || 0) - (a.player_rating || 0);
+        })
+        .map((player, index) => ({ ...player, rank: index + 1 }));
+    
+    // Process each participant and send email
+    let emailsSent = 0;
+    let emailsFailed = 0;
+    
+    for (const participant of participants) {
+        try {
+            const playerId = participant.player_id;
+            
+            // Find user associated with this player
+            let user = null;
+            
+            // First try to find user linked to player
+            if (participant.player.user_id) {
+                user = await db.collection('users').findOne({ id: participant.player.user_id });
+            }
+            
+            // If no linked user, try to find via tournament requests
+            if (!user) {
+                const request = await db.collection('tournament_requests')
+                    .find({ tournament_id, player_id: playerId })
+                    .sort({ request_date: -1 })
+                    .limit(1)
+                    .toArray();
+                    
+                if (request && request[0]?.user_id) {
+                    user = await db.collection('users').findOne({ id: request[0].user_id });
+                }
+            }
+            
+            if (!user || !user.email) {
+                console.log(`ℹ️ No email found for player ${participant.player.name} (${playerId})`);
+                continue;
+            }
+            
+            // Get player's final stats from standings
+            const playerStats = standings.find(s => s.player_id === playerId);
+            if (!playerStats) {
+                console.log(`⚠️ No standings data found for player ${participant.player.name}`);
+                continue;
+            }
+            
+            // Get player's games
+            const playerGames = allPairings
+                .filter(p => p.white_player_id === playerId || p.black_player_id === playerId)
+                .map(p => {
+                    const isWhite = p.white_player_id === playerId;
+                    const opponent = isWhite ? p.black_player : p.white_player;
+                    let result = 'pending';
+                    
+                    if (p.result) {
+                        if (p.result === '1/2-1/2') {
+                            result = 'draw';
+                        } else if ((p.result === '1-0' && isWhite) || (p.result === '0-1' && !isWhite)) {
+                            result = 'win';
+                        } else if (p.result) {
+                            result = 'loss';
+                        }
+                    }
+                    
+                    return {
+                        round: p.round,
+                        color: isWhite ? 'white' : 'black',
+                        opponent: opponent,
+                        pgn_result: p.result,
+                        result: result
+                    };
+                })
+                .sort((a, b) => a.round - b.round);
+            
+            // Send results email
+            await mailer.sendTournamentResultsEmail(
+                user.email,
+                tournament,
+                playerStats,
+                playerGames,
+                standings
+            );
+            
+            console.log(`✅ Sent tournament results email to ${user.email} (${participant.player.name})`);
+            emailsSent++;
+            
+            // Small delay between emails to avoid overwhelming the SMTP server
+            await new Promise(resolve => setTimeout(resolve, 200));
+            
+        } catch (error) {
+            console.error(`❌ Failed to send results email to ${participant.player.name}:`, error.message);
+            emailsFailed++;
+        }
+    }
+    
+    console.log(`🏆 Tournament results email summary: ${emailsSent} sent, ${emailsFailed} failed`);
+    return { sent: emailsSent, failed: emailsFailed };
+}
+
 // Complete a round - mark all pairings as finalized and trigger results update
 app.post('/api/tournaments/:tournament_id/rounds/:round/complete', authenticateToken, asyncHandler(async (req, res) => {
     const { tournament_id, round } = req.params;
@@ -2004,6 +2209,11 @@ app.post('/api/tournaments/:tournament_id/rounds/:round/complete', authenticateT
             if (winner) updateSet.winner_player_id = winner.player_id;
         }
     }
+    
+    // Check if this is the moment tournament just completed
+    const wasTournamentOver = tournament.tournament_over;
+    const isTournamentNowOver = updateSet.tournament_over;
+    const justCompleted = !wasTournamentOver && isTournamentNowOver;
 
     await db.collection('tournaments').updateOne(
         { id: tournament_id },
@@ -2011,6 +2221,17 @@ app.post('/api/tournaments/:tournament_id/rounds/:round/complete', authenticateT
     );
     
     console.log(`✅ Round ${round} completed successfully for tournament ${tournament_id}`);
+    
+    // Send tournament results emails if tournament just completed
+    if (justCompleted) {
+        console.log('🏆 Tournament just completed! Sending results emails to all participants...');
+        try {
+            await sendTournamentResultsEmails(tournament_id);
+        } catch (emailError) {
+            console.warn('⚠️ Failed to send tournament results emails:', emailError.message);
+            // Don't fail the tournament completion if email fails
+        }
+    }
     
     res.json({
         message: `Round ${round} completed successfully`,
@@ -2031,6 +2252,49 @@ app.post('/api/tournaments/:tournament_id/rounds/:round/complete', authenticateT
 
 
 
+
+// Admin endpoint to manually send tournament results emails
+app.post('/api/admin/tournaments/:tournament_id/send-results-emails', authenticateToken, asyncHandler(async (req, res) => {
+    // Admin only endpoint
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Admin access required' });
+    }
+    
+    const { tournament_id } = req.params;
+    
+    // Validate tournament exists and is completed
+    const tournament = await db.collection('tournaments').findOne({ id: tournament_id });
+    if (!tournament) {
+        return res.status(404).json({ error: 'Tournament not found' });
+    }
+    
+    if (!tournament.tournament_over) {
+        return res.status(400).json({ 
+            error: 'Tournament is not yet completed. Results emails can only be sent for completed tournaments.' 
+        });
+    }
+    
+    console.log(`📧 Admin manually triggering tournament results emails for: ${tournament.name}`);
+    
+    try {
+        const emailResults = await sendTournamentResultsEmails(tournament_id);
+        
+        res.json({
+            message: 'Tournament results emails sent successfully',
+            tournament_name: tournament.name,
+            emails_sent: emailResults.sent,
+            emails_failed: emailResults.failed,
+            total_participants: emailResults.sent + emailResults.failed
+        });
+        
+    } catch (error) {
+        console.error('❌ Failed to send tournament results emails:', error.message);
+        res.status(500).json({
+            error: 'Failed to send tournament results emails',
+            message: error.message
+        });
+    }
+}));
 
 // Tournament Request Management Routes
 // Create tournament request (User endpoint)
@@ -2430,6 +2694,22 @@ app.put('/api/tournament-requests/:request_id', authenticateToken, asyncHandler(
     await db.collection('notifications').insertOne(notification);
     
     console.log(`✅ Created ${action} notification for user:`, requestDetails.user.email);
+    
+    // Send email notification with tournament details if request was approved
+    if (action === 'approve' && requestDetails.user.email) {
+        try {
+            await mailer.sendTournamentDetailsEmail(
+                requestDetails.user.email,
+                requestDetails.tournament,
+                requestDetails.player,
+                { isApproval: true }
+            );
+            console.log(`✅ Sent tournament details email to:`, requestDetails.user.email);
+        } catch (emailError) {
+            console.warn('⚠️ Failed to send tournament details email:', emailError.message);
+            // Don't fail the request if email fails
+        }
+    }
     
     res.json({ 
         message: `Request ${action}d successfully`,

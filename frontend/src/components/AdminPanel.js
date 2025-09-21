@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Badge } from './ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Alert, AlertDescription } from './ui/alert';
-import { Trophy, Users, Plus, Edit, Trash2, Calendar, MapPin, AlertCircle, Clock, CheckCircle, XCircle, Menu, X, ArrowLeft, Eye, Phone, Mail, Target, BarChart3, Gamepad2, Crown } from 'lucide-react';
+import { Trophy, Users, Plus, Edit, Trash2, Calendar, MapPin, AlertCircle, Clock, CheckCircle, XCircle, Menu, X, ArrowLeft, Eye, Phone, Mail, Target, BarChart3, Gamepad2, Crown, Save } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { validateTournamentForm, formatDateError } from '../utils/validation';
 
@@ -68,6 +68,7 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
     const [pairingsLoadingId, setPairingsLoadingId] = useState(null);
     const [generatingPairingsId, setGeneratingPairingsId] = useState(null);
     const [savingResultId, setSavingResultId] = useState(null);
+    const [savingAllResults, setSavingAllResults] = useState(false);
     const [resultDraft, setResultDraft] = useState({}); // { pairingId: '1-0' | '0-1' | '1/2-1/2' }
     const [roundAccordion, setRoundAccordion] = useState({}); // { [tournamentId]: { [round]: boolean } }
     const [selectedPairingTournamentId, setSelectedPairingTournamentId] = useState(null);
@@ -76,6 +77,9 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
     const [resultsExpanded, setResultsExpanded] = useState({}); // { [tournamentId]: boolean }
     const [resultsCache, setResultsCache] = useState({}); // { [tournamentId]: { [round]: resultData } }
     const [resultsLoadingKey, setResultsLoadingKey] = useState(null);
+    const [finalStandings, setFinalStandings] = useState({}); // { [tournamentId]: finalStandingsData }
+    const [loadingFinalStandings, setLoadingFinalStandings] = useState(false);
+    const [resultsViewMode, setResultsViewMode] = useState({}); // { [tournamentId]: 'final' | 'rounds' }
     
     // Player details UI state
     const [isPlayerDetailsOpen, setIsPlayerDetailsOpen] = useState(false);
@@ -653,10 +657,197 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
         return list;
     }, [players, playerSearchTerm, playerSortKey]);
 
+    const fetchFinalStandings = async (tournamentId) => {
+        try {
+            setLoadingFinalStandings(true);
+            const token = localStorage.getItem('token');
+            const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
+            
+            // Fetch all pairings for the tournament to calculate final standings
+            const pairingsRes = await axios.get(`${API}/tournaments/${tournamentId}/pairings/all`, { headers: authHeaders });
+            const allPairings = pairingsRes.data || [];
+            
+            // Get participants for this tournament
+            const participantsRes = await axios.get(`${API}/tournaments/${tournamentId}/participants`, { headers: authHeaders });
+            const participants = participantsRes.data || [];
+            
+            // Calculate final standings
+            const playerStats = new Map();
+            
+            // Initialize stats for all participants
+            participants.forEach(participant => {
+                playerStats.set(participant.player_id, {
+                    player_id: participant.player_id,
+                    player_name: participant.player.name,
+                    player_rating: participant.player.rating,
+                    player_title: participant.player.title,
+                    player_email: participant.player.email,
+                    player_phone: participant.player.phone,
+                    points: 0,
+                    games_played: 0,
+                    wins: 0,
+                    draws: 0,
+                    losses: 0,
+                    byes: 0,
+                    opponents: [],
+                    performance_rating: 0
+                });
+            });
+            
+            // Process all pairings to calculate stats
+            allPairings.forEach(pairing => {
+                const whiteId = pairing.white_player_id;
+                const blackId = pairing.black_player_id;
+                const result = pairing.result;
+                
+                // Handle white player
+                if (whiteId && playerStats.has(whiteId)) {
+                    const whiteStat = playerStats.get(whiteId);
+                    
+                    if (!blackId) {
+                        // Bye
+                        whiteStat.points += 1;
+                        whiteStat.byes += 1;
+                    } else {
+                        whiteStat.games_played += 1;
+                        whiteStat.opponents.push(blackId);
+                        
+                        if (result === '1-0') {
+                            whiteStat.points += 1;
+                            whiteStat.wins += 1;
+                        } else if (result === '1/2-1/2') {
+                            whiteStat.points += 0.5;
+                            whiteStat.draws += 1;
+                        } else if (result === '0-1') {
+                            whiteStat.losses += 1;
+                        }
+                    }
+                }
+                
+                // Handle black player
+                if (blackId && playerStats.has(blackId)) {
+                    const blackStat = playerStats.get(blackId);
+                    blackStat.games_played += 1;
+                    blackStat.opponents.push(whiteId);
+                    
+                    if (result === '0-1') {
+                        blackStat.points += 1;
+                        blackStat.wins += 1;
+                    } else if (result === '1/2-1/2') {
+                        blackStat.points += 0.5;
+                        blackStat.draws += 1;
+                    } else if (result === '1-0') {
+                        blackStat.losses += 1;
+                    }
+                }
+            });
+            
+            // Calculate tiebreaks and sort standings
+            const standings = Array.from(playerStats.values())
+                .map(player => {
+                    // Calculate Buchholz (sum of opponents' scores)
+                    const buchholz = player.opponents.reduce((sum, oppId) => {
+                        const opponent = playerStats.get(oppId);
+                        return sum + (opponent ? opponent.points : 0);
+                    }, 0);
+                    
+                    // Calculate Sonneborn-Berger (sum of defeated opponents' scores + 0.5 * drawn opponents' scores)
+                    let sonnebornBerger = 0;
+                    allPairings.forEach(pairing => {
+                        if (pairing.white_player_id === player.player_id) {
+                            if (pairing.result === '1-0') {
+                                // Won as white - add full opponent score
+                                const opponent = playerStats.get(pairing.black_player_id);
+                                if (opponent) sonnebornBerger += opponent.points;
+                            } else if (pairing.result === '1/2-1/2') {
+                                // Drew as white - add half opponent score
+                                const opponent = playerStats.get(pairing.black_player_id);
+                                if (opponent) sonnebornBerger += opponent.points * 0.5;
+                            }
+                        } else if (pairing.black_player_id === player.player_id) {
+                            if (pairing.result === '0-1') {
+                                // Won as black - add full opponent score
+                                const opponent = playerStats.get(pairing.white_player_id);
+                                if (opponent) sonnebornBerger += opponent.points;
+                            } else if (pairing.result === '1/2-1/2') {
+                                // Drew as black - add half opponent score
+                                const opponent = playerStats.get(pairing.white_player_id);
+                                if (opponent) sonnebornBerger += opponent.points * 0.5;
+                            }
+                        }
+                    });
+                    
+                    // Calculate head-to-head result vs direct competitors (for same points)
+                    const directResults = new Map(); // opponent_id -> result
+                    allPairings.forEach(pairing => {
+                        if (pairing.white_player_id === player.player_id && pairing.black_player_id) {
+                            const result = pairing.result;
+                            if (result === '1-0') directResults.set(pairing.black_player_id, 1);
+                            else if (result === '1/2-1/2') directResults.set(pairing.black_player_id, 0.5);
+                            else if (result === '0-1') directResults.set(pairing.black_player_id, 0);
+                        } else if (pairing.black_player_id === player.player_id && pairing.white_player_id) {
+                            const result = pairing.result;
+                            if (result === '0-1') directResults.set(pairing.white_player_id, 1);
+                            else if (result === '1/2-1/2') directResults.set(pairing.white_player_id, 0.5);
+                            else if (result === '1-0') directResults.set(pairing.white_player_id, 0);
+                        }
+                    });
+                    
+                    return {
+                        ...player,
+                        buchholz,
+                        sonnebornBerger,
+                        directResults,
+                        total_games: player.games_played + player.byes
+                    };
+                })
+                .sort((a, b) => {
+                    // Multi-criteria tiebreaking system:
+                    // 1. Points (descending)
+                    if (b.points !== a.points) return b.points - a.points;
+                    
+                    // 2. Head-to-head result (if they played each other)
+                    if (a.directResults.has(b.player_id)) {
+                        const aVsB = a.directResults.get(b.player_id);
+                        const bVsA = b.directResults.has(a.player_id) ? b.directResults.get(a.player_id) : (1 - aVsB);
+                        if (aVsB !== bVsA) return bVsA - aVsB; // Higher score wins
+                    }
+                    
+                    // 3. Buchholz Score (sum of opponents' scores) - descending
+                    if (Math.abs(b.buchholz - a.buchholz) > 0.001) return b.buchholz - a.buchholz;
+                    
+                    // 4. Sonneborn-Berger Score - descending
+                    if (Math.abs(b.sonnebornBerger - a.sonnebornBerger) > 0.001) return b.sonnebornBerger - a.sonnebornBerger;
+                    
+                    // 5. Number of wins - descending
+                    if (b.wins !== a.wins) return b.wins - a.wins;
+                    
+                    // 6. Number of games played (fewer byes is better) - descending
+                    if (b.games_played !== a.games_played) return b.games_played - a.games_played;
+                    
+                    // 7. Initial rating - descending
+                    return (b.player_rating || 0) - (a.player_rating || 0);
+                })
+                .map((player, index) => ({ ...player, rank: index + 1 }));
+                
+            setFinalStandings(prev => ({ ...prev, [tournamentId]: standings }));
+            return standings;
+            
+        } catch (error) {
+            console.error('Error fetching final standings:', error);
+            showMessage(error.response?.data?.error || 'Failed to fetch final standings', true);
+            return [];
+        } finally {
+            setLoadingFinalStandings(false);
+        }
+    };
+
     const goToFinalStandings = async (t) => {
         setActiveTab('results');
+        setSelectedResultsTournamentId(t.id);
         setResultsExpanded(prev => ({ ...prev, [t.id]: true }));
-        await fetchRoundResults(t.id, t.rounds);
+        setResultsViewMode(prev => ({ ...prev, [t.id]: 'final' }));
+        await fetchFinalStandings(t.id);
     };
 
     const handleSavePairingResult = async (tournamentId, pairingId, value) => {
@@ -682,6 +873,55 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
             showMessage(error.response?.data?.error || 'Failed to save result', true);
         } finally {
             setSavingResultId(null);
+        }
+    };
+
+    const handleSaveAllResults = async (tournamentId, round, roundPairings) => {
+        // Get all pairings for this round that have results set (either from draft or existing)
+        const pairingsWithResults = roundPairings
+            .filter(p => p.black_player) // Only real games, not byes
+            .filter(p => {
+                const result = resultDraft[p.id] ?? p.result;
+                return result && ['1-0', '0-1', '1/2-1/2'].includes(result);
+            });
+
+        if (pairingsWithResults.length === 0) {
+            showMessage('No results to save for this round', true);
+            return;
+        }
+
+        if (!window.confirm(`Save all ${pairingsWithResults.length} result(s) for Round ${round}?`)) {
+            return;
+        }
+
+        try {
+            setSavingAllResults(true);
+            const token = localStorage.getItem('token');
+            const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
+
+            // Save all results concurrently
+            const savePromises = pairingsWithResults.map(pairing => {
+                const result = resultDraft[pairing.id] ?? pairing.result;
+                return axios.put(`${API}/pairings/${pairing.id}`, { result }, { headers: authHeaders });
+            });
+
+            await Promise.all(savePromises);
+            
+            showMessage(`Successfully saved ${pairingsWithResults.length} result(s) for Round ${round}`);
+            
+            // Clear all drafts for this round and refresh
+            setResultDraft(prev => {
+                const newDraft = { ...prev };
+                pairingsWithResults.forEach(p => delete newDraft[p.id]);
+                return newDraft;
+            });
+            
+            await fetchTournamentPairings(tournamentId);
+        } catch (error) {
+            console.error('Save all results error:', error);
+            showMessage(error.response?.data?.error || 'Failed to save some results', true);
+        } finally {
+            setSavingAllResults(false);
         }
     };
 
@@ -1559,16 +1799,22 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
                     </Button>
                 </div>
                 {/* Sidebar (desktop) */}
-                <aside className="hidden md:block rounded-2xl bg-gradient-to-br from-slate-50 via-white to-blue-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 border border-slate-200/50 dark:border-gray-700/50 shadow-lg shadow-slate-200/50 dark:shadow-black/20 backdrop-blur-xl p-4 h-fit sticky top-20">
+                <aside className="hidden md:block rounded-2xl bg-gradient-to-br from-slate-50 via-white to-blue-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 border border-slate-200/50 dark:border-gray-700/50 shadow-2xl shadow-slate-200/30 dark:shadow-black/40 backdrop-blur-xl p-5 h-fit sticky top-20 transition-all duration-300 hover:shadow-3xl hover:shadow-slate-200/40 dark:hover:shadow-black/50">
                     {/* Header */}
                     <div className="mb-6 pb-4 border-b border-slate-200/50 dark:border-gray-700/50">
-                        <div className="flex items-center gap-2 mb-2">
-                            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-amber-500 to-orange-500 flex items-center justify-center">
-                                <Crown className="h-4 w-4 text-white" />
+                        <div className="flex items-center gap-3 mb-3">
+                            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 via-orange-500 to-red-500 flex items-center justify-center shadow-lg shadow-orange-200/50 dark:shadow-orange-900/30 ring-2 ring-white/20 dark:ring-gray-800/20">
+                                <Crown className="h-5 w-5 text-white drop-shadow-sm" />
                             </div>
-                            <h2 className="text-sm font-semibold text-slate-800 dark:text-gray-100">Admin Panel</h2>
+                            <div>
+                                <h2 className="text-base font-bold text-slate-800 dark:text-gray-100 tracking-tight">Admin Panel</h2>
+                                <div className="flex items-center gap-1 mt-0.5">
+                                    <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></div>
+                                    <span className="text-[10px] font-medium text-green-600 dark:text-green-400 uppercase tracking-wider">Online</span>
+                                </div>
+                            </div>
                         </div>
-                        <p className="text-xs text-slate-500 dark:text-gray-400">Manage your chess tournaments</p>
+                        <p className="text-xs text-slate-500 dark:text-gray-400 leading-relaxed">Manage your chess tournaments with powerful admin tools</p>
                     </div>
 
                     {/* Navigation */}
@@ -2234,13 +2480,30 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
                                                                         {(t.completed_rounds || []).includes(round) || (t.last_completed_round || 0) >= round ? 'Completed' : 'Open'}
                                                                     </Badge>
                                                                 </div>
-                                                                <div className="text-sm text-gray-600 flex items-center gap-2">
+                                                                <div className="text-sm text-gray-600 flex flex-col sm:flex-row items-start sm:items-center gap-2">
                                                                     <Badge variant="outline" className="text-xs">Boards: {pairingsForT.filter(p => p.round === round).length}</Badge>
-                                                                    {((t.completed_rounds || []).includes(round) || (t.last_completed_round || 0) >= round) ? null : (
-                                                                        <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); handleCompleteRound(t.id, round); }} className="text-green-600 hover:text-green-700">
-                                                                            <CheckCircle className="h-3 w-3 mr-1" /> Complete Round
+                                                                    <div className="flex items-center gap-1">
+                                                                        <Button 
+                                                                            variant="outline" 
+                                                                            size="sm" 
+                                                                            onClick={(e) => { 
+                                                                                e.stopPropagation(); 
+                                                                                const roundPairings = pairingsForT.filter(p => p.round === round);
+                                                                                handleSaveAllResults(t.id, round, roundPairings); 
+                                                                            }} 
+                                                                            disabled={savingAllResults}
+                                                                            className="text-blue-600 hover:text-blue-700"
+                                                                            title="Save all results for this round"
+                                                                        >
+                                                                            <Save className="h-3 w-3 mr-1" />
+                                                                            {savingAllResults ? 'Saving...' : 'Save All'}
                                                                         </Button>
-                                                                    )}
+                                                                        {!((t.completed_rounds || []).includes(round) || (t.last_completed_round || 0) >= round) && (
+                                                                            <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); handleCompleteRound(t.id, round); }} className="text-green-600 hover:text-green-700">
+                                                                                <CheckCircle className="h-3 w-3 mr-1" /> Complete Round
+                                                                            </Button>
+                                                                        )}
+                                                                    </div>
                                                                 </div>
                                                             </div>
                                                             {(roundAccordion[t.id]?.[round]) && (
@@ -2312,6 +2575,27 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
                                                                             ))}
                                                                     </TableBody>
                                                                 </Table>
+                                                                {/* Save All button below table - Always show for open rounds */}
+                                                                {(() => {
+                                                                    const isCompleted = (t.completed_rounds || []).includes(round) || (t.last_completed_round || 0) >= round;
+                                                                    return !isCompleted && (
+                                                                    <div className="mt-3 flex justify-center">
+                                                                        <Button 
+                                                                            variant="outline" 
+                                                                            size="sm" 
+                                                                            onClick={() => {
+                                                                                const roundPairings = pairingsForT.filter(p => p.round === round);
+                                                                                handleSaveAllResults(t.id, round, roundPairings); 
+                                                                            }} 
+                                                                            disabled={savingAllResults}
+                                                                            className="text-blue-600 hover:text-blue-700"
+                                                                        >
+                                                                            <Save className="h-3 w-3 mr-1" />
+                                                                            {savingAllResults ? 'Saving All Results...' : 'Save All Results for Round ' + round}
+                                                                        </Button>
+                                                                    </div>
+                                                                    );
+                                                                })()}
                                                             </div>
                                                             )}
                                                         </div>
@@ -2374,15 +2658,7 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
                                             <TableCell>
                                                 <div className="flex space-x-2">
                                                     <Button variant="outline" size="sm" onClick={() => toggleResultsExpand(t)}>
-                                                        {resultsExpanded[t.id] ? 'Hide' : 'View'}
-                                                    </Button>
-                                                    <Button
-                                                        size="sm"
-                                                        variant="outline"
-                                                        onClick={() => fetchRoundResults(t.id, t.rounds)}
-                                                        disabled={resultsLoadingKey === `${t.id}:${t.rounds}`}
-                                                    >
-                                                        {resultsLoadingKey === `${t.id}:${t.rounds}` ? 'Loading...' : 'Final Standings'}
+                                                        {resultsExpanded[t.id] ? 'Hide Results' : 'View Results'}
                                                     </Button>
                                                 </div>
                                             </TableCell>
@@ -2391,59 +2667,223 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
                                             <TableRow>
                                                 <TableCell colSpan={4}>
                                                     <div className="space-y-4">
-                                                        <div className="flex flex-wrap gap-2 mb-2">
-                                                            {Array.from({ length: t.rounds }, (_, i) => i + 1).map((r) => (
+                                                        {/* Tab Navigation */}
+                                                        <div className="flex items-center justify-between">
+                                                            <div className="flex space-x-1 bg-gray-100 dark:bg-gray-800 p-1 rounded-lg">
                                                                 <Button
-                                                                    key={`btn-${t.id}-${r}`}
-                                                                    variant="outline"
+                                                                    variant={(resultsViewMode[t.id] || 'final') === 'final' ? 'default' : 'ghost'}
                                                                     size="sm"
-                                                                    onClick={() => fetchRoundResults(t.id, r)}
-                                                                    disabled={resultsLoadingKey === `${t.id}:${r}`}
+                                                                    onClick={() => {
+                                                                        setResultsViewMode(prev => ({ ...prev, [t.id]: 'final' }));
+                                                                        if (!finalStandings[t.id]) {
+                                                                            fetchFinalStandings(t.id);
+                                                                        }
+                                                                    }}
+                                                                    className="relative"
                                                                 >
-                                                                    {resultsLoadingKey === `${t.id}:${r}` ? `Round ${r}...` : `Round ${r}`}
+                                                                    <Trophy className="h-3 w-3 mr-1" />
+                                                                    Final Standings
                                                                 </Button>
-                                                            ))}
+                                                                <Button
+                                                                    variant={(resultsViewMode[t.id] || 'final') === 'rounds' ? 'default' : 'ghost'}
+                                                                    size="sm"
+                                                                    onClick={() => setResultsViewMode(prev => ({ ...prev, [t.id]: 'rounds' }))}
+                                                                >
+                                                                    <BarChart3 className="h-3 w-3 mr-1" />
+                                                                    Round Results
+                                                                </Button>
+                                                            </div>
                                                         </div>
-                                                        {(resultsCache[t.id] && Object.keys(resultsCache[t.id]).length > 0) ? (
-                                                            Object.keys(resultsCache[t.id]).sort((a,b)=>Number(a)-Number(b)).map((rKey) => {
-                                                                const data = resultsCache[t.id][rKey];
-                                                                if (!data) return null;
-                                                                return (
-                                                                    <div key={`res-${t.id}-${rKey}`} className="border rounded p-3">
-                                                                        <div className="flex items-center justify-between mb-2">
-                                                                            <div className="font-medium">Round {data.round} Standings</div>
-                                                                            <div className="text-sm text-gray-500">Tournament: {data.tournament_name}</div>
+
+                                                        {/* Final Standings View */}
+                                                        {(resultsViewMode[t.id] || 'final') === 'final' && (
+                                                            <div className="space-y-4">
+                                                                {finalStandings[t.id] ? (
+                                                                    <>
+                                                                        <div className="flex items-center justify-between">
+                                                                            <div>
+                                                                                <h3 className="text-lg font-semibold">Final Standings - {t.name}</h3>
+                                                                                <p className="text-sm text-gray-600">Tournament completed with {finalStandings[t.id].length} participants</p>
+                                                                            </div>
+                                                                            <Button variant="outline" size="sm" onClick={() => fetchFinalStandings(t.id)} disabled={loadingFinalStandings}>
+                                                                                {loadingFinalStandings ? 'Refreshing...' : '🔄 Refresh'}
+                                                                            </Button>
                                                                         </div>
-                                                                        <Table>
-                                                                            <TableHeader>
-                                                                                <TableRow>
-                                                                                    <TableHead>Rank</TableHead>
-                                                                                    <TableHead>Player</TableHead>
-                                                                                    <TableHead>Rating</TableHead>
-                                                                                    <TableHead>Points</TableHead>
-                                                                                    <TableHead>W-D-L</TableHead>
-                                                                                </TableRow>
-                                                                            </TableHeader>
-                                                                            <TableBody>
-                                                                                {data.standings.map((s) => (
-                                                                                    <TableRow key={`${s.player_id}-${data.round}`}>
-                                                                                        <TableCell>{s.rank}</TableCell>
-                                                                                        <TableCell>{s.player_name}</TableCell>
-                                                                                        <TableCell>{s.player_rating}</TableCell>
-                                                                                        <TableCell>{s.points}</TableCell>
-                                                                                        <TableCell>{s.wins}-{s.draws}-{s.losses}</TableCell>
+                                                                        
+                                                                        <div className="border rounded-lg overflow-hidden">
+                                                                            <Table>
+                                                                                <TableHeader>
+                                                                                    <TableRow className="bg-gray-50 dark:bg-gray-800">
+                                                                                        <TableHead className="font-semibold">Rank</TableHead>
+                                                                                        <TableHead className="font-semibold">Player</TableHead>
+                                                                                        <TableHead className="font-semibold">Rating</TableHead>
+                                                                                        <TableHead className="font-semibold">Points</TableHead>
+                                                                                        <TableHead className="font-semibold">Games</TableHead>
+                                                                                        <TableHead className="font-semibold">W-D-L</TableHead>
+                                                                                        <TableHead className="font-semibold">Tiebreaks</TableHead>
                                                                                     </TableRow>
-                                                                                ))}
-                                                                            </TableBody>
-                                                                        </Table>
-                                                                        <div className="text-xs text-gray-600 mt-2">
-                                                                            Completed games in round {data.round}: {data.round_summary.completed_games} / {data.round_summary.total_games}
+                                                                                </TableHeader>
+                                                                                <TableBody>
+                                                                                    {finalStandings[t.id].map((player, index) => (
+                                                                                        <TableRow 
+                                                                                            key={player.player_id} 
+                                                                                            className={`${index < 3 ? (index === 0 ? 'bg-yellow-50 hover:bg-yellow-100' : index === 1 ? 'bg-gray-50 hover:bg-gray-100' : 'bg-orange-50 hover:bg-orange-100') : 'hover:bg-gray-50'} cursor-pointer`}
+                                                                                            onClick={() => openPlayerDetails({
+                                                                                                id: player.player_id,
+                                                                                                name: player.player_name,
+                                                                                                rating: player.player_rating,
+                                                                                                title: player.player_title,
+                                                                                                email: player.player_email,
+                                                                                                phone: player.player_phone
+                                                                                            })}
+                                                                                        >
+                                                                                            <TableCell className="font-semibold">
+                                                                                                <div className="flex items-center gap-2">
+                                                                                                    {index === 0 && <span className="text-yellow-600">🏆</span>}
+                                                                                                    {index === 1 && <span className="text-gray-600">🥈</span>}
+                                                                                                    {index === 2 && <span className="text-orange-600">🥉</span>}
+                                                                                                    {player.rank}
+                                                                                                </div>
+                                                                                            </TableCell>
+                                                                                            <TableCell>
+                                                                                                <div className="flex items-center gap-2">
+                                                                                                    <div>
+                                                                                                        <div className="font-medium text-blue-600 hover:text-blue-800">
+                                                                                                            {player.player_title && (
+                                                                                                                <span className="text-xs bg-blue-100 text-blue-800 px-1 py-0.5 rounded mr-1">
+                                                                                                                    {player.player_title}
+                                                                                                                </span>
+                                                                                                            )}
+                                                                                                            {player.player_name}
+                                                                                                        </div>
+                                                                                                        <div className="text-xs text-gray-500">Click for details</div>
+                                                                                                    </div>
+                                                                                                </div>
+                                                                                            </TableCell>
+                                                                                            <TableCell className="text-gray-600">{player.player_rating || 'Unrated'}</TableCell>
+                                                                                            <TableCell className="font-semibold text-lg">{player.points}</TableCell>
+                                                                                            <TableCell>{player.total_games}</TableCell>
+                                                                                            <TableCell>
+                                                                                                <span className="text-green-600">{player.wins}</span>-
+                                                                                                <span className="text-yellow-600">{player.draws}</span>-
+                                                                                                <span className="text-red-600">{player.losses}</span>
+                                                                                                {player.byes > 0 && (
+                                                                                                    <span className="text-blue-600"> (+{player.byes}B)</span>
+                                                                                                )}
+                                                                                            </TableCell>
+                                                                                            <TableCell className="text-gray-600">
+                                                                                                <div className="text-sm">
+                                                                                                    <div>B: {player.buchholz.toFixed(1)}</div>
+                                                                                                    <div className="text-xs text-gray-500">S-B: {player.sonnebornBerger.toFixed(1)}</div>
+                                                                                                </div>
+                                                                                            </TableCell>
+                                                                                        </TableRow>
+                                                                                    ))}
+                                                                                </TableBody>
+                                                                            </Table>
                                                                         </div>
+                                                                        
+                                                                        <div className="text-xs text-gray-500 space-y-1">
+                                                                            <p><strong>Tiebreaking System:</strong> 1) Points 2) Head-to-head result 3) Buchholz (B) 4) Sonneborn-Berger (S-B) 5) Wins 6) Games played 7) Rating</p>
+                                                                            <p>• <strong>Buchholz:</strong> Sum of all opponents' final scores • <strong>Sonneborn-Berger:</strong> Sum of defeated opponents' scores + half of drawn opponents' scores</p>
+                                                                            <p>• Click on any player name to view detailed statistics • B = Bye games</p>
+                                                                        </div>
+                                                                    </>
+                                                                ) : (
+                                                                    <div className="text-center py-8 text-gray-500">
+                                                                        <Trophy className="h-16 w-16 mx-auto mb-4 text-gray-300" />
+                                                                        <h3 className="text-lg font-medium text-gray-900 mb-2">No Final Standings Yet</h3>
+                                                                        <p>Final standings will be calculated automatically.</p>
+                                                                        <Button 
+                                                                            className="mt-3" 
+                                                                            onClick={() => fetchFinalStandings(t.id)} 
+                                                                            disabled={loadingFinalStandings}
+                                                                        >
+                                                                            <Trophy className="h-3 w-3 mr-1" />
+                                                                            {loadingFinalStandings ? 'Loading...' : 'Calculate Final Standings'}
+                                                                        </Button>
                                                                     </div>
-                                                                );
-                                                            })
-                                                        ) : (
-                                                            <div className="text-gray-500 py-2">Select a round to load results.</div>
+                                                                )}
+                                                            </div>
+                                                        )}
+
+                                                        {/* Round Results View */}
+                                                        {(resultsViewMode[t.id] || 'final') === 'rounds' && (
+                                                            <div className="space-y-4">
+                                                                <div className="flex flex-wrap gap-2 mb-4">
+                                                                    {Array.from({ length: t.rounds }, (_, i) => i + 1).map((r) => (
+                                                                        <Button
+                                                                            key={`btn-${t.id}-${r}`}
+                                                                            variant="outline"
+                                                                            size="sm"
+                                                                            onClick={() => fetchRoundResults(t.id, r)}
+                                                                            disabled={resultsLoadingKey === `${t.id}:${r}`}
+                                                                        >
+                                                                            {resultsLoadingKey === `${t.id}:${r}` ? `Round ${r}...` : `Round ${r}`}
+                                                                        </Button>
+                                                                    ))}
+                                                                </div>
+                                                                
+                                                                {(resultsCache[t.id] && Object.keys(resultsCache[t.id]).length > 0) ? (
+                                                                    Object.keys(resultsCache[t.id]).sort((a,b)=>Number(a)-Number(b)).map((rKey) => {
+                                                                        const data = resultsCache[t.id][rKey];
+                                                                        if (!data) return null;
+                                                                        return (
+                                                                            <div key={`res-${t.id}-${rKey}`} className="border rounded-lg p-4">
+                                                                                <div className="flex items-center justify-between mb-3">
+                                                                                    <div className="font-medium text-lg">Round {data.round} Standings</div>
+                                                                                    <div className="text-sm text-gray-500">Tournament: {data.tournament_name}</div>
+                                                                                </div>
+                                                                                <div className="border rounded-lg overflow-hidden">
+                                                                                    <Table>
+                                                                                        <TableHeader>
+                                                                                            <TableRow className="bg-gray-50">
+                                                                                                <TableHead>Rank</TableHead>
+                                                                                                <TableHead>Player</TableHead>
+                                                                                                <TableHead>Rating</TableHead>
+                                                                                                <TableHead>Points</TableHead>
+                                                                                                <TableHead>W-D-L</TableHead>
+                                                                                            </TableRow>
+                                                                                        </TableHeader>
+                                                                                        <TableBody>
+                                                                                            {data.standings.map((s) => (
+                                                                                                <TableRow 
+                                                                                                    key={`${s.player_id}-${data.round}`}
+                                                                                                    className="hover:bg-gray-50 cursor-pointer"
+                                                                                                    onClick={() => openPlayerDetails({
+                                                                                                        id: s.player_id,
+                                                                                                        name: s.player_name,
+                                                                                                        rating: s.player_rating
+                                                                                                    })}
+                                                                                                >
+                                                                                                    <TableCell className="font-semibold">{s.rank}</TableCell>
+                                                                                                    <TableCell className="text-blue-600 hover:text-blue-800 font-medium">{s.player_name}</TableCell>
+                                                                                                    <TableCell>{s.player_rating}</TableCell>
+                                                                                                    <TableCell className="font-semibold">{s.points}</TableCell>
+                                                                                                    <TableCell>
+                                                                                                        <span className="text-green-600">{s.wins}</span>-
+                                                                                                        <span className="text-yellow-600">{s.draws}</span>-
+                                                                                                        <span className="text-red-600">{s.losses}</span>
+                                                                                                    </TableCell>
+                                                                                                </TableRow>
+                                                                                            ))}
+                                                                                        </TableBody>
+                                                                                    </Table>
+                                                                                </div>
+                                                                                <div className="text-xs text-gray-600 mt-2">
+                                                                                    Completed games in round {data.round}: {data.round_summary.completed_games} / {data.round_summary.total_games}
+                                                                                </div>
+                                                                            </div>
+                                                                        );
+                                                                    })
+                                                                ) : (
+                                                                    <div className="text-center py-8 text-gray-500">
+                                                                        <BarChart3 className="h-16 w-16 mx-auto mb-4 text-gray-300" />
+                                                                        <h3 className="text-lg font-medium text-gray-900 mb-2">No Round Results Yet</h3>
+                                                                        <p>Click on a round button above to load standings for that round.</p>
+                                                                    </div>
+                                                                )}
+                                                            </div>
                                                         )}
                                                     </div>
                                                 </TableCell>
@@ -2483,13 +2923,16 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
                     <div className="absolute left-0 top-0 h-full w-80 bg-gradient-to-br from-slate-50 via-white to-blue-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 border-r border-slate-200/50 dark:border-gray-700/50 shadow-2xl p-6">
                         {/* Mobile Header */}
                         <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-200/50 dark:border-gray-700/50">
-                            <div className="flex items-center gap-2">
-                                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-amber-500 to-orange-500 flex items-center justify-center">
-                                    <Crown className="h-4 w-4 text-white" />
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 via-orange-500 to-red-500 flex items-center justify-center shadow-lg shadow-orange-200/50 dark:shadow-orange-900/30 ring-2 ring-white/20 dark:ring-gray-800/20">
+                                    <Crown className="h-5 w-5 text-white drop-shadow-sm" />
                                 </div>
                                 <div>
-                                    <div className="font-semibold text-slate-800 dark:text-gray-100">Admin Panel</div>
-                                    <div className="text-xs text-slate-500 dark:text-gray-400">Manage tournaments</div>
+                                    <div className="font-bold text-slate-800 dark:text-gray-100 tracking-tight">Admin Panel</div>
+                                    <div className="flex items-center gap-1 mt-0.5">
+                                        <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></div>
+                                        <span className="text-[10px] font-medium text-green-600 dark:text-green-400 uppercase tracking-wider">Online</span>
+                                    </div>
                                 </div>
                             </div>
                             <Button variant="ghost" size="icon" onClick={() => setMobileNavOpen(false)} className="h-8 w-8 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800">

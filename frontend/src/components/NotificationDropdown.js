@@ -206,20 +206,40 @@ const NotificationDropdown = () => {
 
     return (
         <div className="relative">
-            {/* Bell Icon with Badge */}
+            {/* Bell Icon with Badge and Enhanced Visual Effects */}
             <Button
                 ref={buttonRef}
                 variant="ghost"
                 size="sm"
-                className="relative"
+                className={`relative transition-all duration-300 hover:scale-110 ${
+                    unreadCount > 0 
+                        ? 'hover:bg-amber-50 dark:hover:bg-amber-900/20' 
+                        : 'hover:bg-gray-100 dark:hover:bg-gray-800'
+                }`}
                 onClick={handleToggle}
-                title="Notifications"
+                title={unreadCount > 0 ? `${unreadCount} unread notification${unreadCount > 1 ? 's' : ''}` : 'Notifications'}
             >
-                <Bell className="h-5 w-5" />
+                {/* Bell Icon with Shake Animation */}
+                <Bell className={`h-5 w-5 transition-all duration-300 ${
+                    unreadCount > 0 
+                        ? 'text-amber-600 dark:text-amber-400 animate-pulse' 
+                        : 'text-gray-600 dark:text-gray-400'
+                }`} />
+                
+                {/* Animated Badge */}
                 {unreadCount > 0 && (
-                    <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center">
-                        {unreadCount > 9 ? '9+' : unreadCount}
-                    </span>
+                    <>
+                        {/* Pulsing Ring Effect */}
+                        <span className="absolute -top-1 -right-1 w-6 h-6 bg-red-400 rounded-full animate-ping opacity-75"></span>
+                        
+                        {/* Main Badge */}
+                        <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center font-bold transform transition-all duration-300 hover:scale-110 animate-bounce">
+                            {unreadCount > 9 ? '9+' : unreadCount}
+                        </span>
+                        
+                        {/* Subtle Glow Effect */}
+                        <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 rounded-full blur-sm opacity-30 animate-pulse"></span>
+                    </>
                 )}
             </Button>
             
