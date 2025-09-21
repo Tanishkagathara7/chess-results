@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Badge } from './ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Alert, AlertDescription } from './ui/alert';
-import { Trophy, Users, Plus, Edit, Trash2, Calendar, MapPin, AlertCircle, Clock, CheckCircle, XCircle } from 'lucide-react';
+import { Trophy, Users, Plus, Edit, Trash2, Calendar, MapPin, AlertCircle, Clock, CheckCircle, XCircle, Menu, X, ArrowLeft, Eye, Phone, Mail, Target, BarChart3, Gamepad2, Crown } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { validateTournamentForm, formatDateError } from '../utils/validation';
 
@@ -27,6 +27,7 @@ const AdminPanel = () => {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
+    const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
     // Form states
     const [tournamentForm, setTournamentForm] = useState({
@@ -45,7 +46,9 @@ const AdminPanel = () => {
         name: '',
         rating: '',
         title: 'none',
-        birth_year: ''
+        birth_year: '',
+        email: '',
+        phone: ''
     });
 
     const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -66,10 +69,31 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
     const [generatingPairingsId, setGeneratingPairingsId] = useState(null);
     const [savingResultId, setSavingResultId] = useState(null);
     const [resultDraft, setResultDraft] = useState({}); // { pairingId: '1-0' | '0-1' | '1/2-1/2' }
+    const [roundAccordion, setRoundAccordion] = useState({}); // { [tournamentId]: { [round]: boolean } }
+    const [selectedPairingTournamentId, setSelectedPairingTournamentId] = useState(null);
+    const [selectedResultsTournamentId, setSelectedResultsTournamentId] = useState(null);
 
     const [resultsExpanded, setResultsExpanded] = useState({}); // { [tournamentId]: boolean }
     const [resultsCache, setResultsCache] = useState({}); // { [tournamentId]: { [round]: resultData } }
     const [resultsLoadingKey, setResultsLoadingKey] = useState(null);
+    
+    // Player details UI state
+    const [isPlayerDetailsOpen, setIsPlayerDetailsOpen] = useState(false);
+    const [selectedPlayerDetails, setSelectedPlayerDetails] = useState(null);
+    const [playerHistory, setPlayerHistory] = useState([]);
+    const [playerStats, setPlayerStats] = useState(null);
+    const [playerDetailsLoading, setPlayerDetailsLoading] = useState(false);
+    const [playerDetailsError, setPlayerDetailsError] = useState('');
+    
+    // Tournaments UI filters
+    const [searchTerm, setSearchTerm] = useState('');
+    const [typeFilter, setTypeFilter] = useState('all'); // all | swiss | knockout
+    const [statusFilter, setStatusFilter] = useState('all'); // all | upcoming | ongoing | completed
+    const [sortKey, setSortKey] = useState('start_desc'); // start_desc | start_asc | name_asc
+    
+    // Players UI filters
+    const [playerSearchTerm, setPlayerSearchTerm] = useState('');
+    const [playerSortKey, setPlayerSortKey] = useState('name_asc'); // name_asc | name_desc | rating_desc | rating_asc
     
     // Manual refresh only - no automatic polling
 
@@ -80,7 +104,36 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
     
     // Real-time polling disabled - users can manually refresh using the refresh button
     
+    // Default selected tournament for Pairings view
+    useEffect(() => {
+        if (!selectedPairingTournamentId && tournaments.length > 0) {
+            setSelectedPairingTournamentId(tournaments[0].id);
+        }
+    }, [tournaments, selectedPairingTournamentId]);
 
+    // Fetch pairings when a tournament is selected in Pairings view
+    useEffect(() => {
+        if (selectedPairingTournamentId && !pairingsMap[selectedPairingTournamentId]) {
+            fetchTournamentPairings(selectedPairingTournamentId);
+        }
+        if (selectedPairingTournamentId) {
+            setPairingsExpanded(prev => ({ ...prev, [selectedPairingTournamentId]: true }));
+        }
+    }, [selectedPairingTournamentId]);
+
+    // Default selected tournament for Results view
+    useEffect(() => {
+        if (!selectedResultsTournamentId && tournaments.length > 0) {
+            setSelectedResultsTournamentId(tournaments[0].id);
+        }
+    }, [tournaments, selectedResultsTournamentId]);
+
+    // Expand selected tournament by default in Results view
+    useEffect(() => {
+        if (selectedResultsTournamentId) {
+            setResultsExpanded(prev => ({ ...prev, [selectedResultsTournamentId]: true }));
+        }
+    }, [selectedResultsTournamentId]);
     const fetchAllData = async () => {
         try {
             // Get auth token
@@ -504,6 +557,17 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
         }
     };
 
+    // Accordion toggle per-round inside a tournament
+    const toggleRoundAccordion = (tournamentId, round) => {
+        setRoundAccordion(prev => ({
+            ...prev,
+            [tournamentId]: {
+                ...(prev[tournamentId] || {}),
+                [round]: !(prev[tournamentId]?.[round])
+            }
+        }));
+    };
+
     const handleCompleteRound = async (tournamentId, round) => {
         try {
             const token = localStorage.getItem('token');
@@ -523,6 +587,71 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
         const lastCompleted = t.last_completed_round || 0;
         return t.tournament_over === true || (rounds > 0 && (completedCount >= rounds || lastCompleted >= rounds));
     };
+
+    // Derive tournament status for UI
+    const getTournamentStatus = (t) => {
+        const now = Date.now();
+        const start = new Date(t.start_date).getTime();
+        const end = new Date(t.end_date).getTime();
+        if (Number.isFinite(start) && now < start) return 'upcoming';
+        if ((Number.isFinite(end) && now > end) || isTournamentEnded(t)) return 'completed';
+        return 'ongoing';
+    };
+
+    // Filter, sort, and search tournaments for display
+    const filteredTournaments = useMemo(() => {
+        let list = Array.isArray(tournaments) ? [...tournaments] : [];
+        const q = searchTerm.trim().toLowerCase();
+        if (q) {
+            list = list.filter(t => (t.name || '').toLowerCase().includes(q) || (t.location || '').toLowerCase().includes(q));
+        }
+        if (typeFilter !== 'all') {
+            list = list.filter(t => (t.tournament_type || 'swiss') === typeFilter);
+        }
+        if (statusFilter !== 'all') {
+            list = list.filter(t => getTournamentStatus(t) === statusFilter);
+        }
+        switch (sortKey) {
+            case 'start_asc':
+                list.sort((a, b) => new Date(a.start_date) - new Date(b.start_date));
+                break;
+            case 'name_asc':
+                list.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+                break;
+            case 'start_desc':
+            default:
+                list.sort((a, b) => new Date(b.start_date) - new Date(a.start_date));
+        }
+        return list;
+    }, [tournaments, searchTerm, typeFilter, statusFilter, sortKey]);
+
+    // Filter, sort, and search players for display
+    const filteredPlayers = useMemo(() => {
+        let list = Array.isArray(players) ? [...players] : [];
+        const q = playerSearchTerm.trim().toLowerCase();
+        if (q) {
+            list = list.filter(p => 
+                (p.name || '').toLowerCase().includes(q) ||
+                (p.email || '').toLowerCase().includes(q) ||
+                (p.phone || '').toLowerCase().includes(q)
+            );
+        }
+        switch (playerSortKey) {
+            case 'name_desc':
+                list.sort((a, b) => (b.name || '').localeCompare(a.name || ''));
+                break;
+            case 'rating_desc':
+                list.sort((a, b) => (b.rating || 0) - (a.rating || 0));
+                break;
+            case 'rating_asc':
+                list.sort((a, b) => (a.rating || 0) - (b.rating || 0));
+                break;
+            case 'name_asc':
+            default:
+                list.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+        }
+        return list;
+    }, [players, playerSearchTerm, playerSortKey]);
 
     const goToFinalStandings = async (t) => {
         setActiveTab('results');
@@ -589,7 +718,9 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
                 ...playerForm,
                 rating: parseInt(playerForm.rating) || 0,
                 birth_year: playerForm.birth_year ? parseInt(playerForm.birth_year) : undefined,
-                title: playerForm.title === 'none' ? '' : playerForm.title
+                title: playerForm.title === 'none' ? '' : playerForm.title,
+                email: playerForm.email ? playerForm.email : undefined,
+                phone: playerForm.phone ? playerForm.phone : undefined
             };
 
             if (editingId) {
@@ -615,7 +746,9 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
             name: player.name,
             rating: player.rating.toString(),
             title: player.title || 'none',
-            birth_year: player.birth_year ? player.birth_year.toString() : ''
+            birth_year: player.birth_year ? player.birth_year.toString() : '',
+            email: player.email || '',
+            phone: player.phone || ''
         });
         setEditingId(player.id);
         setIsDialogOpen(true);
@@ -638,9 +771,101 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
             name: '',
             rating: '',
             title: 'none',
-            birth_year: ''
+            birth_year: '',
+            email: '',
+            phone: ''
         });
         setEditingId(null);
+    };
+
+    // Player details helpers
+    const computePlayerStats = (history = []) => {
+        let wins = 0, draws = 0, losses = 0, byes = 0, white = 0, black = 0;
+        history.forEach(h => {
+            if (h.is_bye) { byes += 1; return; }
+            if (h.color === 'white') white += 1; else if (h.color === 'black') black += 1;
+            if (h.result === 'win') wins += 1; else if (h.result === 'draw') draws += 1; else if (h.result === 'loss') losses += 1;
+        });
+        return { total: wins + draws + losses + byes, wins, draws, losses, byes, white, black };
+    };
+
+    const fetchPlayerHistoryData = async (player) => {
+        setPlayerDetailsError('');
+        setPlayerDetailsLoading(true);
+        try {
+            // Try dedicated endpoint if exists
+            try {
+                const res = await axios.get(`${API}/players/${player.id}/history`);
+                const hist = Array.isArray(res.data) ? res.data : (res.data?.history || []);
+                if (hist.length > 0) {
+                    setPlayerHistory(hist);
+                    setPlayerStats(computePlayerStats(hist));
+                    return;
+                }
+            } catch (e) {
+                // Fallback below
+            }
+            // Fallback: aggregate from existing tournament pairings
+            const tournamentsRes = await axios.get(`${API}/tournaments`);
+            const ts = tournamentsRes.data || [];
+            const all = [];
+            // limit concurrency by sequential fetch to avoid hammering
+            for (const t of ts) {
+                try {
+                    const pr = await axios.get(`${API}/tournaments/${t.id}/pairings`);
+                    const pairs = pr.data || [];
+                    pairs.forEach(p => {
+                        const isWhite = p.white_player_id === player.id;
+                        const isBlack = p.black_player_id === player.id;
+                        if (!isWhite && !isBlack) return;
+                        const color = isWhite ? 'white' : (isBlack ? 'black' : null);
+                        let result = null;
+                        if (!p.black_player_id && isWhite) {
+                            // bye counted as point
+                            result = 'win';
+                        } else if (p.result === '1-0') {
+                            result = isWhite ? 'win' : 'loss';
+                        } else if (p.result === '0-1') {
+                            result = isBlack ? 'win' : 'loss';
+                        } else if (p.result === '1/2-1/2') {
+                            result = 'draw';
+                        }
+                        all.push({
+                            tournament_id: t.id,
+                            tournament_name: t.name,
+                            round: p.round,
+                            color,
+                            opponent_name: isWhite ? (p.black_player?.name || p.black_player_id || 'BYE') : (p.white_player?.name || p.white_player_id),
+                            opponent_rating: isWhite ? (p.black_player?.rating || null) : (p.white_player?.rating || null),
+                            result,
+                            is_bye: !p.black_player_id && isWhite,
+                        });
+                    });
+                } catch (e) {
+                    // ignore tournaments without pairings
+                }
+            }
+            setPlayerHistory(all);
+            setPlayerStats(computePlayerStats(all));
+        } catch (err) {
+            setPlayerDetailsError(err.response?.data?.error || 'Failed to load player history');
+            setPlayerHistory([]);
+            setPlayerStats(computePlayerStats([]));
+        } finally {
+            setPlayerDetailsLoading(false);
+        }
+    };
+
+    const openPlayerDetails = async (player) => {
+        setSelectedPlayerDetails(player);
+        setIsPlayerDetailsOpen(true);
+        try {
+            const res = await axios.get(`${API}/players/${player.id}`);
+            if (res.data) setSelectedPlayerDetails(res.data);
+        } catch (e) {
+            // ignore
+        }
+        await fetchPlayerHistoryData(player);
     };
 
     // Request management functions
@@ -1000,6 +1225,25 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
                                 onChange={(e) => setPlayerForm({...playerForm, birth_year: e.target.value})}
                             />
                         </div>
+                        <div>
+                            <Label htmlFor="email">Email</Label>
+                            <Input
+                                id="email"
+                                type="email"
+                                value={playerForm.email}
+                                onChange={(e) => setPlayerForm({ ...playerForm, email: e.target.value })}
+                                placeholder="user@example.com"
+                            />
+                        </div>
+                        <div>
+                            <Label htmlFor="phone">Phone</Label>
+                            <Input
+                                id="phone"
+                                value={playerForm.phone}
+                                onChange={(e) => setPlayerForm({ ...playerForm, phone: e.target.value })}
+                                placeholder="+1 555 123 4567"
+                            />
+                        </div>
                     </div>
                     <div className="flex justify-end space-x-2">
                         <Button 
@@ -1017,6 +1261,111 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
                         </Button>
                     </div>
                 </form>
+            </DialogContent>
+        </Dialog>
+    );
+
+    const renderPlayerDetailsDialog = () => (
+        <Dialog open={isPlayerDetailsOpen} onOpenChange={setIsPlayerDetailsOpen}>
+            <DialogContent className="max-w-4xl">
+                <DialogHeader>
+                    <DialogTitle>Player Details</DialogTitle>
+                </DialogHeader>
+                {!selectedPlayerDetails ? (
+                    <div className="text-gray-500">No player selected</div>
+                ) : (
+                    <div className="space-y-4">
+                        <div className="flex items-start justify-between">
+                            <div>
+                                <div className="text-lg font-semibold flex items-center gap-2">
+                                    {selectedPlayerDetails.name}
+                                    {selectedPlayerDetails.title && <Badge variant="secondary">{selectedPlayerDetails.title}</Badge>}
+                                </div>
+                                <div className="text-sm text-gray-600">Rating: {selectedPlayerDetails.rating}</div>
+                                <div className="text-sm text-gray-600">Birth Year: {selectedPlayerDetails.birth_year || '-'}</div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-3">
+                                <div className="flex items-center gap-2 text-sm text-gray-700">
+                                    <Phone className="h-4 w-4 text-gray-400" />
+                                    <span>{selectedPlayerDetails.phone || '-'}</span>
+                                </div>
+                                <div className="flex items-center gap-2 text-sm text-gray-700">
+                                    <Mail className="h-4 w-4 text-gray-400" />
+                                    <span>{selectedPlayerDetails.email || '-'}</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Stats */}
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                            <Card>
+                                <CardContent className="p-3">
+                                    <div className="text-xs text-gray-500">Total Games</div>
+                                    <div className="text-lg font-semibold">{playerStats?.total ?? 0}</div>
+                                </CardContent>
+                            </Card>
+                            <Card>
+                                <CardContent className="p-3">
+                                    <div className="text-xs text-gray-500">W-D-L</div>
+                                    <div className="text-lg font-semibold">{playerStats ? `${playerStats.wins}-${playerStats.draws}-${playerStats.losses}` : '0-0-0'}</div>
+                                </CardContent>
+                            </Card>
+                            <Card>
+                                <CardContent className="p-3">
+                                    <div className="text-xs text-gray-500">Byes</div>
+                                    <div className="text-lg font-semibold">{playerStats?.byes ?? 0}</div>
+                                </CardContent>
+                            </Card>
+                            <Card>
+                                <CardContent className="p-3">
+                                    <div className="text-xs text-gray-500">Colors</div>
+                                    <div className="text-lg font-semibold">{playerStats ? `${playerStats.white}W / ${playerStats.black}B` : '0W / 0B'}</div>
+                                </CardContent>
+                            </Card>
+                        </div>
+
+                        {/* History */}
+                        <div className="border rounded-md">
+                            <div className="p-3 flex items-center justify-between">
+                                <div className="font-medium">Recent Games</div>
+                                {playerDetailsLoading && <div className="text-xs text-gray-500">Loading...</div>}
+                                {playerDetailsError && <div className="text-xs text-red-600">{playerDetailsError}</div>}
+                            </div>
+                            <div className="max-h-[320px] overflow-y-auto">
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow>
+                                            <TableHead>Tournament</TableHead>
+                                            <TableHead>Round</TableHead>
+                                            <TableHead>Opponent</TableHead>
+                                            <TableHead>Color</TableHead>
+                                            <TableHead>Result</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {playerHistory.length === 0 ? (
+                                            <TableRow>
+                                                <TableCell colSpan={5}>
+                                                    <div className="text-center text-gray-500 py-6">No history found.</div>
+                                                </TableCell>
+                                            </TableRow>
+                                        ) : (
+                                            playerHistory.slice().reverse().slice(0, 20).map((h, idx) => (
+                                                <TableRow key={`hist-${idx}`}>
+                                                    <TableCell className="font-medium">{h.tournament_name}</TableCell>
+                                                    <TableCell>{h.round}</TableCell>
+                                                    <TableCell>{h.opponent_name}{h.opponent_rating ? ` (${h.opponent_rating})` : ''}</TableCell>
+                                                    <TableCell className="capitalize">{h.is_bye ? '—' : h.color}</TableCell>
+                                                    <TableCell className={`${h.result === 'win' ? 'text-green-700' : h.result === 'loss' ? 'text-red-700' : 'text-gray-700'}`}>{h.is_bye ? 'BYE' : (h.result ? h.result.toUpperCase() : '-')}</TableCell>
+                                                </TableRow>
+                                            ))
+                                        )}
+                                    </TableBody>
+                                </Table>
+                            </div>
+                        </div>
+                    </div>
+                )}
             </DialogContent>
         </Dialog>
     );
@@ -1179,7 +1528,7 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
     );
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-6 max-w-7xl mx-auto px-4 md:px-6">
             {/* Messages */}
             {error && (
                 <Alert className="border-red-200 bg-red-50">
@@ -1193,73 +1542,177 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
             )}
 
             {/* Layout with sidebar */}
-            <div className="md:grid md:grid-cols-[220px,1fr] gap-6">
-                {/* Sidebar */}
-                <aside className="rounded-lg border border-gray-200 bg-white/70 dark:bg-gray-900/60 dark:border-gray-800 p-3 h-fit sticky top-20">
-                    <div className="space-y-1">
+            <div className="md:grid md:grid-cols-[240px,1fr] items-start gap-6">
+                {/* Mobile top bar */}
+                <div className="md:hidden flex items-center justify-between mb-2">
+                    <Button variant="ghost" size="sm" onClick={() => navigate('/home')} className="px-2">
+                        <ArrowLeft className="h-4 w-4 mr-1" /> Back
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => setMobileNavOpen(true)} className="px-3">
+                        <Menu className="h-4 w-4 mr-2" /> Sections
+                    </Button>
+                </div>
+                {/* Desktop back button */}
+                <div className="hidden md:flex mb-2 md:col-span-2">
+                    <Button variant="ghost" size="sm" onClick={() => navigate('/home')} className="px-2">
+                        <ArrowLeft className="h-4 w-4 mr-1" /> Back
+                    </Button>
+                </div>
+                {/* Sidebar (desktop) */}
+                <aside className="hidden md:block rounded-2xl bg-gradient-to-br from-slate-50 via-white to-blue-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 border border-slate-200/50 dark:border-gray-700/50 shadow-lg shadow-slate-200/50 dark:shadow-black/20 backdrop-blur-xl p-4 h-fit sticky top-20">
+                    {/* Header */}
+                    <div className="mb-6 pb-4 border-b border-slate-200/50 dark:border-gray-700/50">
+                        <div className="flex items-center gap-2 mb-2">
+                            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-amber-500 to-orange-500 flex items-center justify-center">
+                                <Crown className="h-4 w-4 text-white" />
+                            </div>
+                            <h2 className="text-sm font-semibold text-slate-800 dark:text-gray-100">Admin Panel</h2>
+                        </div>
+                        <p className="text-xs text-slate-500 dark:text-gray-400">Manage your chess tournaments</p>
+                    </div>
+
+                    {/* Navigation */}
+                    <nav className="space-y-2">
                         <button
                             onClick={() => setActiveTab('tournaments')}
-                            className={`w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                            className={`group w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 hover:shadow-md ${
                                 activeTab === 'tournaments'
-                                    ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                                    : 'text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800'
+                                    ? 'bg-gradient-to-r from-amber-500/10 to-orange-500/10 text-amber-700 dark:text-amber-400 border border-amber-200/50 dark:border-amber-500/30 shadow-lg shadow-amber-100/50 dark:shadow-amber-900/20'
+                                    : 'text-slate-600 hover:text-slate-800 hover:bg-slate-100/80 dark:text-gray-300 dark:hover:text-gray-100 dark:hover:bg-gray-800/80'
                             }`}
                         >
-                            <Trophy className="h-4 w-4" />
-                            <span>Tournaments</span>
-                            <span className="ml-auto text-xs opacity-70">{tournaments.length}</span>
+                            <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
+                                activeTab === 'tournaments'
+                                    ? 'bg-gradient-to-br from-amber-500 to-orange-500 text-white'
+                                    : 'bg-slate-200/80 text-slate-600 group-hover:bg-slate-300 dark:bg-gray-700 dark:text-gray-300'
+                            }`}>
+                                <Trophy className="h-4 w-4" />
+                            </div>
+                            <div className="flex-1 flex items-center justify-between">
+                                <span>Tournaments</span>
+                                <span className={`text-xs px-2 py-1 rounded-full font-medium ${
+                                    activeTab === 'tournaments'
+                                        ? 'bg-amber-200/50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+                                        : 'bg-slate-200/80 text-slate-500 dark:bg-gray-700/50 dark:text-gray-400'
+                                }`}>
+                                    {tournaments.length}
+                                </span>
+                            </div>
                         </button>
+
                         <button
                             onClick={() => setActiveTab('players')}
-                            className={`w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                            className={`group w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 hover:shadow-md ${
                                 activeTab === 'players'
-                                    ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                                    : 'text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800'
+                                    ? 'bg-gradient-to-r from-blue-500/10 to-indigo-500/10 text-blue-700 dark:text-blue-400 border border-blue-200/50 dark:border-blue-500/30 shadow-lg shadow-blue-100/50 dark:shadow-blue-900/20'
+                                    : 'text-slate-600 hover:text-slate-800 hover:bg-slate-100/80 dark:text-gray-300 dark:hover:text-gray-100 dark:hover:bg-gray-800/80'
                             }`}
                         >
-                            <Users className="h-4 w-4" />
-                            <span>Players</span>
-                            <span className="ml-auto text-xs opacity-70">{players.length}</span>
+                            <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
+                                activeTab === 'players'
+                                    ? 'bg-gradient-to-br from-blue-500 to-indigo-500 text-white'
+                                    : 'bg-slate-200/80 text-slate-600 group-hover:bg-slate-300 dark:bg-gray-700 dark:text-gray-300'
+                            }`}>
+                                <Users className="h-4 w-4" />
+                            </div>
+                            <div className="flex-1 flex items-center justify-between">
+                                <span>Players</span>
+                                <span className={`text-xs px-2 py-1 rounded-full font-medium ${
+                                    activeTab === 'players'
+                                        ? 'bg-blue-200/50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'
+                                        : 'bg-slate-200/80 text-slate-500 dark:bg-gray-700/50 dark:text-gray-400'
+                                }`}>
+                                    {players.length}
+                                </span>
+                            </div>
                         </button>
+
                         <button
                             onClick={() => setActiveTab('requests')}
-                            className={`w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                            className={`group w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 hover:shadow-md ${
                                 activeTab === 'requests'
-                                    ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                                    : 'text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800'
+                                    ? 'bg-gradient-to-r from-purple-500/10 to-pink-500/10 text-purple-700 dark:text-purple-400 border border-purple-200/50 dark:border-purple-500/30 shadow-lg shadow-purple-100/50 dark:shadow-purple-900/20'
+                                    : 'text-slate-600 hover:text-slate-800 hover:bg-slate-100/80 dark:text-gray-300 dark:hover:text-gray-100 dark:hover:bg-gray-800/80'
                             }`}
                         >
-                            <Clock className="h-4 w-4" />
-                            <span>Requests</span>
-                            <span className="ml-auto text-xs opacity-70">{requests.filter(r => r.status === 'pending').length}</span>
+                            <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-colors relative ${
+                                activeTab === 'requests'
+                                    ? 'bg-gradient-to-br from-purple-500 to-pink-500 text-white'
+                                    : 'bg-slate-200/80 text-slate-600 group-hover:bg-slate-300 dark:bg-gray-700 dark:text-gray-300'
+                            }`}>
+                                <Clock className="h-4 w-4" />
+                                {requests.filter(r => r.status === 'pending').length > 0 && (
+                                    <div className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full border-2 border-white dark:border-gray-800 animate-pulse"></div>
+                                )}
+                            </div>
+                            <div className="flex-1 flex items-center justify-between">
+                                <span>Requests</span>
+                                <span className={`text-xs px-2 py-1 rounded-full font-medium ${
+                                    requests.filter(r => r.status === 'pending').length > 0
+                                        ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300 animate-pulse'
+                                        : activeTab === 'requests'
+                                            ? 'bg-purple-200/50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300'
+                                            : 'bg-slate-200/80 text-slate-500 dark:bg-gray-700/50 dark:text-gray-400'
+                                }`}>
+                                    {requests.filter(r => r.status === 'pending').length}
+                                </span>
+                            </div>
                         </button>
+
                         <button
                             onClick={() => setActiveTab('pairings')}
-                            className={`w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                            className={`group w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 hover:shadow-md ${
                                 activeTab === 'pairings'
-                                    ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                                    : 'text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800'
+                                    ? 'bg-gradient-to-r from-green-500/10 to-emerald-500/10 text-green-700 dark:text-green-400 border border-green-200/50 dark:border-green-500/30 shadow-lg shadow-green-100/50 dark:shadow-green-900/20'
+                                    : 'text-slate-600 hover:text-slate-800 hover:bg-slate-100/80 dark:text-gray-300 dark:hover:text-gray-100 dark:hover:bg-gray-800/80'
                             }`}
                         >
-                            <span>Pairings</span>
+                            <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
+                                activeTab === 'pairings'
+                                    ? 'bg-gradient-to-br from-green-500 to-emerald-500 text-white'
+                                    : 'bg-slate-200/80 text-slate-600 group-hover:bg-slate-300 dark:bg-gray-700 dark:text-gray-300'
+                            }`}>
+                                <Target className="h-4 w-4" />
+                            </div>
+                            <div className="flex-1">
+                                <span>Pairings</span>
+                            </div>
                         </button>
+
                         <button
                             onClick={() => setActiveTab('results')}
-                            className={`w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                            className={`group w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 hover:shadow-md ${
                                 activeTab === 'results'
-                                    ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                                    : 'text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800'
+                                    ? 'bg-gradient-to-r from-rose-500/10 to-pink-500/10 text-rose-700 dark:text-rose-400 border border-rose-200/50 dark:border-rose-500/30 shadow-lg shadow-rose-100/50 dark:shadow-rose-900/20'
+                                    : 'text-slate-600 hover:text-slate-800 hover:bg-slate-100/80 dark:text-gray-300 dark:hover:text-gray-100 dark:hover:bg-gray-800/80'
                             }`}
                         >
-                            <span>Results</span>
+                            <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
+                                activeTab === 'results'
+                                    ? 'bg-gradient-to-br from-rose-500 to-pink-500 text-white'
+                                    : 'bg-slate-200/80 text-slate-600 group-hover:bg-slate-300 dark:bg-gray-700 dark:text-gray-300'
+                            }`}>
+                                <BarChart3 className="h-4 w-4" />
+                            </div>
+                            <div className="flex-1">
+                                <span>Results</span>
+                            </div>
                         </button>
+                    </nav>
+
+                    {/* Footer */}
+                    <div className="mt-6 pt-4 border-t border-slate-200/50 dark:border-gray-700/50">
+                        <div className="flex items-center justify-center gap-1 text-xs text-slate-400 dark:text-gray-500">
+                            <Gamepad2 className="h-3 w-3" />
+                            <span>Chess Results</span>
+                        </div>
                     </div>
                 </aside>
 
                 {/* Content */}
-                <div className="space-y-6">
+                <div className="min-w-0 space-y-6">
             {activeTab === 'tournaments' && (
-                <Card>
+                <Card className="w-full">
                     <CardHeader className="flex flex-row items-center justify-between">
                         <CardTitle>Tournament Management</CardTitle>
                         <Button 
@@ -1273,84 +1726,150 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
                         </Button>
                     </CardHeader>
                     <CardContent>
-                        <Table>
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead>Name</TableHead>
-                                    <TableHead>Location</TableHead>
-                                    <TableHead>Dates</TableHead>
-                                    <TableHead>Rounds</TableHead>
-                                    <TableHead>Type</TableHead>
-                                    <TableHead>Time Control</TableHead>
-                                    <TableHead>Players</TableHead>
-                                    <TableHead>Actions</TableHead>
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {tournaments.map((tournament) => (
-                                    <TableRow key={tournament.id}>
-                                        <TableCell className="font-medium">{tournament.name}</TableCell>
-                                        <TableCell>
-                                            <div className="flex items-center">
-                                                <MapPin className="h-3 w-3 mr-1 text-gray-400" />
-                                                {tournament.location}
-                                            </div>
-                                        </TableCell>
-                                        <TableCell>
-                                            <div className="flex items-center">
-                                                <Calendar className="h-3 w-3 mr-1 text-gray-400" />
-                                                {new Date(tournament.start_date).toLocaleDateString()} - {new Date(tournament.end_date).toLocaleDateString()}
-                                            </div>
-                                        </TableCell>
-                                        <TableCell>{tournament.rounds}</TableCell>
-                                        <TableCell>
-                                            <Badge variant="outline" className="capitalize">
-                                                {tournament.tournament_type || 'swiss'}
-                                            </Badge>
-                                        </TableCell>
-                                        <TableCell>{tournament.time_control}</TableCell>
-                                        <TableCell>
-                                            <Badge variant="outline">
-                                                {tournament.participant_count || 0} players
-                                            </Badge>
-                                        </TableCell>
-                                        <TableCell>
-                                            <div className="flex space-x-2">
-                                                <Button
-                                                    variant="outline"
-                                                    size="sm"
-                                                    onClick={() => handleAddPlayersClick(tournament)}
-                                                    className="text-blue-600 hover:text-blue-700"
-                                                    title="Add Players"
-                                                >
-                                                    <Users className="h-3 w-3" />
-                                                </Button>
-                                                <Button
-                                                    variant="outline"
-                                                    size="sm"
-                                                    onClick={() => handleTournamentEdit(tournament)}
-                                                    title="Edit Tournament"
-                                                >
-                                                    <Edit className="h-3 w-3" />
-                                                </Button>
-                                                <Button
-                                                    variant="outline"
-                                                    size="sm"
-                                                    onClick={() => handleTournamentDelete(tournament.id)}
-                                                    className="text-red-600 hover:text-red-700"
-                                                    title="Delete Tournament"
-                                                >
-                                                    <Trash2 className="h-3 w-3" />
-                                                </Button>
-                                            </div>
-                                        </TableCell>
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-3">
+                            <div className="flex flex-wrap gap-2">
+                                <Input
+                                    placeholder="Search by name or location"
+                                    value={searchTerm}
+                                    onChange={(e) => setSearchTerm(e.target.value)}
+                                    className="w-[220px]"
+                                />
+                                <Select value={typeFilter} onValueChange={setTypeFilter}>
+                                    <SelectTrigger className="w-[160px]"><SelectValue placeholder="Type" /></SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All types</SelectItem>
+                                        <SelectItem value="swiss">Swiss</SelectItem>
+                                        <SelectItem value="knockout">Knockout</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                                <Select value={statusFilter} onValueChange={setStatusFilter}>
+                                    <SelectTrigger className="w-[160px]"><SelectValue placeholder="Status" /></SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All status</SelectItem>
+                                        <SelectItem value="upcoming">Upcoming</SelectItem>
+                                        <SelectItem value="ongoing">Ongoing</SelectItem>
+                                        <SelectItem value="completed">Completed</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                                <Select value={sortKey} onValueChange={setSortKey}>
+                                    <SelectTrigger className="w-[180px]">
+                                        <SelectValue placeholder="Sort by" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="start_desc">Start date (newest)</SelectItem>
+                                        <SelectItem value="start_asc">Start date (oldest)</SelectItem>
+                                        <SelectItem value="name_asc">Name (A-Z)</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                                {(searchTerm || typeFilter !== 'all' || statusFilter !== 'all' || sortKey !== 'start_desc') && (
+                                    <Button type="button" variant="outline" onClick={() => { setSearchTerm(''); setTypeFilter('all'); setStatusFilter('all'); setSortKey('start_desc'); }}>Reset</Button>
+                                )}
+                            </div>
+                            <div className="text-sm text-gray-600">{filteredTournaments.length} of {tournaments.length} shown</div>
+                        </div>
+                        <div className="overflow-x-auto -mx-2 sm:mx-0">
+<Table className="w-full">
+                                <TableHeader>
+                                    <TableRow>
+                                        <TableHead>Name</TableHead>
+                                        <TableHead className="hidden sm:table-cell">Location</TableHead>
+                                        <TableHead>Dates</TableHead>
+                                        <TableHead className="hidden sm:table-cell">Rounds</TableHead>
+                                        <TableHead className="hidden md:table-cell">Type</TableHead>
+                                        <TableHead className="hidden md:table-cell">Time Control</TableHead>
+                                        <TableHead className="hidden md:table-cell">Players</TableHead>
+                                        <TableHead>Actions</TableHead>
                                     </TableRow>
-                                ))}
-                            </TableBody>
-                        </Table>
+                                </TableHeader>
+                                <TableBody>
+                                    {filteredTournaments.map((tournament) => (
+                                        <TableRow key={tournament.id}>
+                                            <TableCell className="font-medium">{tournament.name}</TableCell>
+                                            <TableCell className="hidden sm:table-cell">
+                                                <div className="flex items-center">
+                                                    <MapPin className="h-3 w-3 mr-1 text-gray-400" />
+                                                    {tournament.location}
+                                                </div>
+                                            </TableCell>
+                                            <TableCell>
+                                                <div className="flex items-center">
+                                                    <Calendar className="h-3 w-3 mr-1 text-gray-400" />
+                                                    {new Date(tournament.start_date).toLocaleDateString()} - {new Date(tournament.end_date).toLocaleDateString()}
+                                                </div>
+                                            </TableCell>
+                                            <TableCell className="hidden sm:table-cell">
+                                                <div className="space-y-1">
+                                                    <div>{tournament.rounds}</div>
+                                                    <div className="h-1 bg-gray-200 rounded">
+                                                        <div className="h-full bg-amber-500 rounded" style={{ width: `${Math.min(100, Math.round(((Math.max(tournament.last_completed_round || 0, (Array.isArray(tournament.completed_rounds) ? tournament.completed_rounds.length : 0))) / (tournament.rounds || 1)) * 100))}%` }} />
+                                                    </div>
+                                                    <div className="text-[10px] text-gray-500">
+                                                        {Math.max(tournament.last_completed_round || 0, (Array.isArray(tournament.completed_rounds) ? tournament.completed_rounds.length : 0))} / {tournament.rounds || 0}
+                                                    </div>
+                                                </div>
+                                            </TableCell>
+                                            <TableCell className="hidden md:table-cell">
+                                                <div className="flex items-center gap-2">
+                                                    <Badge variant="outline" className="capitalize">
+                                                        {tournament.tournament_type || 'swiss'}
+                                                    </Badge>
+                                                    <Badge 
+                                                        variant="secondary" 
+                                                        className={`${getTournamentStatus(tournament) === 'upcoming' ? 'bg-yellow-50 text-yellow-700 border-yellow-200' : getTournamentStatus(tournament) === 'ongoing' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-green-50 text-green-700 border-green-200'}`}
+                                                    >
+                                                        {getTournamentStatus(tournament)}
+                                                    </Badge>
+                                                </div>
+                                            </TableCell>
+                                            <TableCell className="hidden md:table-cell">{tournament.time_control}</TableCell>
+                                            <TableCell className="hidden md:table-cell">
+                                                <Badge variant="outline">
+                                                    {tournament.participant_count || 0} players
+                                                </Badge>
+                                            </TableCell>
+                                            <TableCell>
+                                                <div className="flex space-x-2">
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => handleAddPlayersClick(tournament)}
+                                                        className="text-blue-600 hover:text-blue-700"
+                                                        title="Add Players"
+                                                    >
+                                                        <Users className="h-3 w-3" />
+                                                    </Button>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => handleTournamentEdit(tournament)}
+                                                        title="Edit Tournament"
+                                                    >
+                                                        <Edit className="h-3 w-3" />
+                                                    </Button>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => handleTournamentDelete(tournament.id)}
+                                                        className="text-red-600 hover:text-red-700"
+                                                        title="Delete Tournament"
+                                                    >
+                                                        <Trash2 className="h-3 w-3" />
+                                                    </Button>
+                                                </div>
+                                            </TableCell>
+                                        </TableRow>
+                                    ))}
+                                </TableBody>
+                            </Table>
+                        </div>
                         {tournaments.length === 0 && (
                             <div className="text-center py-8 text-gray-500">
                                 No tournaments found. Create your first tournament!
+                            </div>
+                        )}
+                        {tournaments.length > 0 && filteredTournaments.length === 0 && (
+                            <div className="text-center py-8 text-gray-500">
+                                No tournaments match your filters.
                             </div>
                         )}
                     </CardContent>
@@ -1358,12 +1877,13 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
             )}
 
             {activeTab === 'players' && (
-                <Card>
+                <Card className="w-full">
                     <CardHeader className="flex flex-row items-center justify-between">
                         <CardTitle>Player Management</CardTitle>
                         <div className="flex items-center gap-2">
                             <Button 
                                 variant="outline"
+                                className="px-2 sm:px-3 text-xs sm:text-sm"
                                 onClick={async () => {
                                     try {
                                         const token = localStorage.getItem('token');
@@ -1380,6 +1900,7 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
                             </Button>
                             <Button 
                                 variant="outline"
+                                className="px-2 sm:px-3 text-xs sm:text-sm"
                                 onClick={async () => {
                                     try {
                                         const token = localStorage.getItem('token');
@@ -1394,6 +1915,7 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
                                 Cleanup Duplicates
                             </Button>
                             <Button 
+                                className="px-2 sm:px-3 text-xs sm:text-sm"
                                 onClick={() => {
                                     resetPlayerForm();
                                     setIsDialogOpen(true);
@@ -1405,51 +1927,91 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
                         </div>
                     </CardHeader>
                     <CardContent>
-                        <Table>
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead>Name</TableHead>
-                                    <TableHead>Rating</TableHead>
-                                    <TableHead>Title</TableHead>
-                                    <TableHead>Birth Year</TableHead>
-                                    <TableHead>Actions</TableHead>
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {players.map((player) => (
-                                    <TableRow key={player.id}>
-                                        <TableCell className="font-medium">{player.name}</TableCell>
-                                        <TableCell>{player.rating}</TableCell>
-                                        <TableCell>
-                                            {player.title && <Badge variant="secondary">{player.title}</Badge>}
-                                        </TableCell>
-                                        <TableCell>{player.birth_year || '-'}</TableCell>
-                                        <TableCell>
-                                            <div className="flex space-x-2">
-                                                <Button
-                                                    variant="outline"
-                                                    size="sm"
-                                                    onClick={() => handlePlayerEdit(player)}
-                                                >
-                                                    <Edit className="h-3 w-3" />
-                                                </Button>
-                                                <Button
-                                                    variant="outline"
-                                                    size="sm"
-                                                    onClick={() => handlePlayerDelete(player.id)}
-                                                    className="text-red-600 hover:text-red-700"
-                                                >
-                                                    <Trash2 className="h-3 w-3" />
-                                                </Button>
-                                            </div>
-                                        </TableCell>
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-3">
+                            <div className="flex flex-wrap gap-2">
+                                <Input
+                                    placeholder="Search by name, email, or phone"
+                                    value={playerSearchTerm}
+                                    onChange={(e) => setPlayerSearchTerm(e.target.value)}
+                                    className="w-[220px]"
+                                />
+                                <Select value={playerSortKey} onValueChange={setPlayerSortKey}>
+                                    <SelectTrigger className="w-[180px]">
+                                        <SelectValue placeholder="Sort by" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="name_asc">Name (A-Z)</SelectItem>
+                                        <SelectItem value="name_desc">Name (Z-A)</SelectItem>
+                                        <SelectItem value="rating_desc">Rating (High-Low)</SelectItem>
+                                        <SelectItem value="rating_asc">Rating (Low-High)</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                                {(playerSearchTerm || playerSortKey !== 'name_asc') && (
+                                    <Button type="button" variant="outline" onClick={() => { setPlayerSearchTerm(''); setPlayerSortKey('name_asc'); }}>Reset</Button>
+                                )}
+                            </div>
+                            <div className="text-sm text-gray-600">{filteredPlayers.length} of {players.length} shown</div>
+                        </div>
+                        <div className="overflow-x-auto -mx-2 sm:mx-0">
+<Table className="w-full">
+                                <TableHeader>
+                                    <TableRow>
+                                        <TableHead>Name</TableHead>
+                                        <TableHead>Rating</TableHead>
+                                        <TableHead className="hidden sm:table-cell">Title</TableHead>
+                                        <TableHead className="hidden sm:table-cell">Birth Year</TableHead>
+                                        <TableHead>Actions</TableHead>
                                     </TableRow>
-                                ))}
-                            </TableBody>
-                        </Table>
+                                </TableHeader>
+                                <TableBody>
+                                    {filteredPlayers.map((player) => (
+                                        <TableRow key={player.id}>
+                                            <TableCell className="font-medium">{player.name}</TableCell>
+                                            <TableCell>{player.rating}</TableCell>
+                                            <TableCell className="hidden sm:table-cell">
+                                                {player.title && <Badge variant="secondary">{player.title}</Badge>}
+                                            </TableCell>
+                                            <TableCell className="hidden sm:table-cell">{player.birth_year || '-'}</TableCell>
+                                            <TableCell>
+                                                <div className="flex space-x-2">
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => openPlayerDetails(player)}
+                                                        title="View Details"
+                                                    >
+                                                        <Eye className="h-3 w-3" />
+                                                    </Button>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => handlePlayerEdit(player)}
+                                                    >
+                                                        <Edit className="h-3 w-3" />
+                                                    </Button>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => handlePlayerDelete(player.id)}
+                                                        className="text-red-600 hover:text-red-700"
+                                                    >
+                                                        <Trash2 className="h-3 w-3" />
+                                                    </Button>
+                                                </div>
+                                            </TableCell>
+                                        </TableRow>
+                                    ))}
+                                </TableBody>
+                            </Table>
+                        </div>
                         {players.length === 0 && (
                             <div className="text-center py-8 text-gray-500">
                                 No players found. Add your first player!
+                            </div>
+                        )}
+                        {players.length > 0 && filteredPlayers.length === 0 && (
+                            <div className="text-center py-8 text-gray-500">
+                                No players match your search criteria.
                             </div>
                         )}
                     </CardContent>
@@ -1457,7 +2019,7 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
             )}
 
             {activeTab === 'requests' && (
-                <Card>
+                <Card className="w-full">
                     <CardHeader>
                         <div className="flex items-center justify-between">
                             <div>
@@ -1482,20 +2044,21 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
                         </div>
                     </CardHeader>
                     <CardContent>
-                        <Table>
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead>Player</TableHead>
-                                    <TableHead>Tournament</TableHead>
-                                    <TableHead>Rating</TableHead>
-                                    <TableHead>Request Date</TableHead>
-                                    <TableHead>Status</TableHead>
-                                    <TableHead>Actions</TableHead>
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {requests.map((request) => (
-                                    <TableRow key={request.id}>
+                        <div className="overflow-x-auto -mx-2 sm:mx-0">
+<Table className="w-full">
+                                <TableHeader>
+                                    <TableRow>
+                                        <TableHead>Player</TableHead>
+                                        <TableHead>Tournament</TableHead>
+                                        <TableHead className="hidden sm:table-cell">Rating</TableHead>
+                                        <TableHead className="hidden sm:table-cell">Request Date</TableHead>
+                                        <TableHead>Status</TableHead>
+                                        <TableHead>Actions</TableHead>
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                    {requests.map((request) => (
+                                        <TableRow key={request.id}>
                                         <TableCell className="font-medium">
                                             <div>
                                                 <div>{request.player.name}</div>
@@ -1508,8 +2071,8 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
                                                 <div className="text-xs text-gray-500">{request.tournament.location}</div>
                                             </div>
                                         </TableCell>
-                                        <TableCell>{request.player.rating}</TableCell>
-                                        <TableCell>{new Date(request.request_date).toLocaleDateString()}</TableCell>
+                                        <TableCell className="hidden sm:table-cell">{request.player.rating}</TableCell>
+                                        <TableCell className="hidden sm:table-cell">{new Date(request.request_date).toLocaleDateString()}</TableCell>
                                         <TableCell>
                                             <Badge 
                                                 variant={request.status === 'pending' ? 'secondary' : 
@@ -1576,6 +2139,7 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
                                 ))}
                             </TableBody>
                         </Table>
+                        </div>
                         {requests.length === 0 && (
                             <div className="text-center py-8 text-gray-500">
                                 <Clock className="h-16 w-16 mx-auto mb-4 text-gray-300" />
@@ -1588,179 +2152,223 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
             )}
 
             {activeTab === 'pairings' && (
-                <Card>
-                    <CardHeader className="flex flex-row items-center justify-between">
+                <Card className="w-full">
+                    <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                         <CardTitle>Pairings</CardTitle>
-                        <Button variant="outline" size="sm" onClick={fetchAllData}>🔄 Refresh</Button>
+                        <div className="flex items-center gap-2">
+                            <span className="text-sm text-gray-600">Select tournament</span>
+                            <Select value={selectedPairingTournamentId ? String(selectedPairingTournamentId) : ''} onValueChange={(v) => setSelectedPairingTournamentId(v)}>
+                                <SelectTrigger className="w-[220px]">
+                                    <SelectValue placeholder="Select tournament" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {tournaments.map((t) => (
+                                        <SelectItem key={`pairing-sel-${t.id}`} value={String(t.id)}>{t.name}</SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                            <Button variant="outline" size="sm" onClick={fetchAllData}>🔄 Refresh</Button>
+                        </div>
                     </CardHeader>
                     <CardContent>
-                        <Table>
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead>Tournament</TableHead>
-                                    <TableHead>Type</TableHead>
-                                    <TableHead>Rounds</TableHead>
-                                    <TableHead>Players</TableHead>
-                                    <TableHead>Actions</TableHead>
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {tournaments.map((t) => {
+                        <div className="space-y-4">
+                            {selectedPairingTournamentId ? (
+                                tournaments.filter(t => t.id === selectedPairingTournamentId).map((t) => {
                                     const pairingsForT = pairingsMap[t.id] || [];
                                     const nextRound = getNextRoundNumber(t, pairingsForT);
                                     const ended = isTournamentEnded(t) || nextRound > (t.rounds || 0);
                                     const canGenerate = !ended && nextRound <= (t.rounds || 0);
                                     const genDisabled = generatingPairingsId === t.id || !canGenerate;
                                     return (
-                                        <React.Fragment key={`pair-row-${t.id}`}>
-                                            <TableRow>
-                                                <TableCell className="font-medium">{t.name}</TableCell>
-                                                <TableCell className="capitalize">{t.tournament_type || 'swiss'}</TableCell>
-                                                <TableCell>{t.rounds}</TableCell>
-                                                <TableCell>{t.participant_count || 0}</TableCell>
-                                                <TableCell>
-                                                    <div className="flex space-x-2">
-                                                        <Button
-                                                            variant="outline"
-                                                            size="sm"
-                                                            onClick={() => togglePairingsExpand(t)}
-                                                            disabled={pairingsLoadingId === t.id}
-                                                        >
-                                                            {pairingsExpanded[t.id] ? 'Hide' : 'View'}
-                                                        </Button>
-                                                        {ended ? (
-                                                            <div className="flex items-center gap-2">
-                                                                <Badge variant="secondary">Tournament ended</Badge>
-                                                                <Button
-                                                                    size="sm"
-                                                                    variant="outline"
-                                                                    onClick={() => goToFinalStandings(t)}
-                                                                >
-                                                                    Final Standings
-                                                                </Button>
-                                                            </div>
-                                                        ) : (
-                                                            <Button
-                                                                size="sm"
-                                                                onClick={() => handleGeneratePairings(t)}
-                                                                disabled={genDisabled}
-                                                                title={canGenerate ? '' : 'All rounds are generated'}
-                                                            >
-                                                                {generatingPairingsId === t.id ? 'Generating...' : `Generate Round ${nextRound}`}
-                                                            </Button>
-                                                        )}
+                                        <div key={`pair-card-${t.id}`} className="border rounded-lg p-4 bg-white/70 dark:bg-gray-900/60">
+                                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                                            <div className="space-y-1">
+                                                <div className="text-base font-semibold">{t.name}</div>
+                                                <div className="flex flex-wrap items-center gap-2 text-sm">
+                                                    <Badge variant="outline" className="capitalize">{t.tournament_type === 'knockout' ? '⚔ Knockout' : '♟ Swiss'}</Badge>
+                                                    <Badge variant="outline">👥 Players: {t.participant_count || 0}</Badge>
+                                                    <Badge variant="secondary" className="text-[11px]">{ended ? 'All rounds completed' : `Rounds: ${t.rounds} • Next: ${nextRound}`}</Badge>
+                                                </div>
+                                                <div className="pt-1">
+                                                    <div className="flex items-center justify-between text-[11px] text-gray-500 mb-1">
+                                                        <span>{ended ? `Round ${t.rounds || 0} of ${t.rounds || 0}` : `Round ${Math.min(nextRound, t.rounds || nextRound)} of ${t.rounds || 0}`}</span>
                                                     </div>
-                                                </TableCell>
-                                            </TableRow>
-                                            {pairingsExpanded[t.id] && (
-                                                <TableRow>
-                                                    <TableCell colSpan={5}>
-                                                        {pairingsForT.length === 0 ? (
-                                                            <div className="text-gray-500 py-4">No pairings yet.</div>
-                                                        ) : (
-                                                            <div className="space-y-4">
-                                                                {[...new Set(pairingsForT.map(p => p.round))].sort((a,b)=>a-b).map((round) => (
-                                                                    <div key={`round-${t.id}-${round}`} className="border rounded p-3">
-                                                                        <div className="flex items-center justify-between mb-2">
-                                                                            <div className="font-medium">Round {round}</div>
-                                                                            <div className="text-sm text-gray-500 flex items-center gap-2">
-                                                                                <span>Boards: {pairingsForT.filter(p => p.round === round).length}</span>
-                                                                                <Button
-                                                                                    variant="outline"
-                                                                                    size="sm"
-                                                                                    onClick={() => handleCompleteRound(t.id, round)}
-                                                                                >
-                                                                                    Complete Round
-                                                                                </Button>
-                                                                            </div>
-                                                                        </div>
-                                                                        <Table>
-                                                                            <TableHeader>
-                                                                                <TableRow>
-                                                                                    <TableHead>Board</TableHead>
-                                                                                    <TableHead>White</TableHead>
-                                                                                    <TableHead>Black</TableHead>
-                                                                                    <TableHead>Result</TableHead>
-                                                                                </TableRow>
-                                                                            </TableHeader>
-                                                                            <TableBody>
-                                                                                {pairingsForT.filter(p => p.round === round).sort((a,b)=>a.board_number-b.board_number).map(p => (
-                                                                                    <TableRow key={p.id}>
-                                                                                        <TableCell>{p.board_number}</TableCell>
-                                                                                        <TableCell>{p.white_player?.name || p.white_player_id}</TableCell>
-                                                                                        <TableCell>{p.black_player ? (p.black_player?.name || p.black_player_id) : <Badge variant="secondary">BYE</Badge>}</TableCell>
-                                                                                        <TableCell>
-                                                                                            {p.black_player ? (
-                                                                                                <div className="flex items-center gap-2">
-<Select
-                                                                                                        value={resultDraft[p.id] ?? p.result}
-                                                                                                        onValueChange={(v) => setResultDraft(prev => ({ ...prev, [p.id]: v }))}
-                                                                                                    >
-                                                                                                        <SelectTrigger className="h-8 w-32 text-sm">
-                                                                                                            <SelectValue placeholder="Set result" />
-                                                                                                        </SelectTrigger>
-                                                                                                        <SelectContent>
-                                                                                                            <SelectItem value="1-0">1-0 (White)</SelectItem>
-                                                                                                            <SelectItem value="1/2-1/2">1/2-1/2 (Draw)</SelectItem>
-                                                                                                            <SelectItem value="0-1">0-1 (Black)</SelectItem>
-                                                                                                        </SelectContent>
-                                                                                                    </Select>
-                                                                                                    <Button
-                                                                                                        size="sm"
-                                                                                                        onClick={() => handleSavePairingResult(t.id, p.id, resultDraft[p.id] ?? p.result)}
-                                                                                                        disabled={savingResultId === p.id || !(resultDraft[p.id] ?? p.result)}
-                                                                                                    >
-                                                                                                        {savingResultId === p.id ? 'Saving...' : (p.result ? 'Update' : 'Save')}
-                                                                                                    </Button>
-                                                                                                </div>
-                                                                                            ) : (
-                                                                                                '1 (bye)'
-                                                                                            )}
-                                                                                        </TableCell>
-                                                                                    </TableRow>
-                                                                                ))}
-                                                                            </TableBody>
-                                                                        </Table>
-                                                                    </div>
-                                                                ))}
+                                                    <div className="h-1.5 w-full bg-gray-200 rounded">
+                                                        <div className="h-full bg-amber-500 rounded" style={{ width: `${Math.min(100, Math.round(((Math.max(t.last_completed_round || 0, (Array.isArray(t.completed_rounds) ? t.completed_rounds.length : 0))) / (t.rounds || 1)) * 100))}%` }} />
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <Button variant="outline" size="sm" onClick={() => togglePairingsExpand(t)} disabled={pairingsLoadingId === t.id}>
+                                                    {pairingsExpanded[t.id] ? 'Hide' : 'View'}
+                                                </Button>
+                                                {ended ? (
+                                                    <>
+                                                        <Badge variant="secondary" className="bg-green-50 text-green-700 border-green-200">Tournament ended</Badge>
+                                                        <Button size="sm" variant="outline" onClick={() => goToFinalStandings(t)}>
+                                                            <Trophy className="h-3 w-3 mr-1" /> Final Standings
+                                                        </Button>
+                                                    </>
+                                                ) : (
+                                                    <Button size="sm" onClick={() => handleGeneratePairings(t)} disabled={genDisabled} title={canGenerate ? '' : 'All rounds are generated'}>
+                                                        {generatingPairingsId === t.id
+                                                            ? 'Generating...'
+                                                            : (pairingsForT.length === 0 ? 'Start Tournament' : 'Generate Next Round')}
+                                                    </Button>
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        {pairingsExpanded[t.id] && (
+                                            <div className="mt-3 space-y-4">
+                                                {pairingsForT.length === 0 ? (
+                                                    <div className="text-gray-500 py-4">No pairings yet.</div>
+                                                ) : (
+                                                    [...new Set(pairingsForT.map(p => p.round))].sort((a,b)=>a-b).map((round) => (
+                                                        <div key={`round-${t.id}-${round}`} className="border rounded-lg p-3 bg-gray-50 dark:bg-gray-900/40">
+                                                            <div className="flex items-center justify-between mb-2 cursor-pointer select-none" onClick={() => toggleRoundAccordion(t.id, round)}>
+                                                                <div className="flex items-center gap-2">
+                                                                    <span className="text-xs">{(roundAccordion[t.id]?.[round]) ? '▾' : '▸'}</span>
+                                                                    <div className="font-medium">Round {round}</div>
+                                                                    <Badge variant={(t.completed_rounds || []).includes(round) || (t.last_completed_round || 0) >= round ? 'secondary' : 'outline'} className={(t.completed_rounds || []).includes(round) || (t.last_completed_round || 0) >= round ? 'bg-green-50 text-green-700 border-green-200' : ''}>
+                                                                        {(t.completed_rounds || []).includes(round) || (t.last_completed_round || 0) >= round ? 'Completed' : 'Open'}
+                                                                    </Badge>
+                                                                </div>
+                                                                <div className="text-sm text-gray-600 flex items-center gap-2">
+                                                                    <Badge variant="outline" className="text-xs">Boards: {pairingsForT.filter(p => p.round === round).length}</Badge>
+                                                                    {((t.completed_rounds || []).includes(round) || (t.last_completed_round || 0) >= round) ? null : (
+                                                                        <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); handleCompleteRound(t.id, round); }} className="text-green-600 hover:text-green-700">
+                                                                            <CheckCircle className="h-3 w-3 mr-1" /> Complete Round
+                                                                        </Button>
+                                                                    )}
+                                                                </div>
                                                             </div>
-                                                        )}
-                                                    </TableCell>
-                                                </TableRow>
-                                            )}
-                                        </React.Fragment>
-                                    );
-                                })}
-                            </TableBody>
-                        </Table>
-                        {tournaments.length === 0 && (
-                            <div className="text-center py-8 text-gray-500">No tournaments found.</div>
-                        )}
+                                                            {(roundAccordion[t.id]?.[round]) && (
+                                                            <div className="overflow-x-auto -mx-2 sm:mx-0">
+                                                                <Table className="w-full">
+                                                                    <TableHeader>
+                                                                        <TableRow>
+                                                                            <TableHead>Board</TableHead>
+                                                                            <TableHead>White</TableHead>
+                                                                            <TableHead>Black</TableHead>
+                                                                            <TableHead>Result</TableHead>
+                                                                        </TableRow>
+                                                                    </TableHeader>
+                                                                    <TableBody>
+                                                                        {pairingsForT
+                                                                            .filter(p => p.round === round)
+                                                                            .sort((a,b)=>a.board_number-b.board_number)
+                                                                            .map(p => (
+                                                                                <TableRow key={p.id}>
+                                                                                    <TableCell>{p.board_number}</TableCell>
+                                                                                    <TableCell className={`flex items-center ${((resultDraft[p.id] ?? p.result) === '1-0') ? 'font-semibold text-green-700' : ''}`}>
+                                                                                        <span className="mr-1">♔</span>
+                                                                                        <span>{p.white_player?.name || p.white_player_id}</span>
+                                                                                        {((resultDraft[p.id] ?? p.result) === '1-0') && <CheckCircle className="h-3 w-3 ml-1 text-green-600" />}
+                                                                                        {((resultDraft[p.id] ?? p.result) === '1/2-1/2') && <Badge variant="secondary" className="ml-1 text-[10px]">Draw</Badge>}
+                                                                                    </TableCell>
+                                                                                    <TableCell>
+                                                                                        {p.black_player ? (
+                                                                                            <div className={`flex items-center ${((resultDraft[p.id] ?? p.result) === '0-1') ? 'font-semibold text-green-700' : ''}`}>
+                                                                                                <span className="mr-1">♚</span>
+                                                                                                <span>{p.black_player?.name || p.black_player_id}</span>
+                                                                                                {((resultDraft[p.id] ?? p.result) === '0-1') && <CheckCircle className="h-3 w-3 ml-1 text-green-600" />}
+                                                                                                {((resultDraft[p.id] ?? p.result) === '1/2-1/2') && <Badge variant="secondary" className="ml-1 text-[10px]">Draw</Badge>}
+                                                                                            </div>
+                                                                                        ) : (
+                                                                                            <Badge variant="secondary">BYE</Badge>
+                                                                                        )}
+                                                                                    </TableCell>
+                                                                                    <TableCell>
+                                                                                        {p.black_player ? (
+                                                                                            <div className="flex items-center gap-2">
+                                                                                                <div className="hidden sm:flex gap-1">
+                                                                                                    <Button size="sm" variant="ghost" className="px-2" onClick={() => setResultDraft(prev => ({ ...prev, [p.id]: '1-0' }))}>1-0</Button>
+                                                                                                    <Button size="sm" variant="ghost" className="px-2" onClick={() => setResultDraft(prev => ({ ...prev, [p.id]: '1/2-1/2' }))}>1/2-1/2</Button>
+                                                                                                    <Button size="sm" variant="ghost" className="px-2" onClick={() => setResultDraft(prev => ({ ...prev, [p.id]: '0-1' }))}>0-1</Button>
+                                                                                                </div>
+                                                                                                <Select
+                                                                                                    value={resultDraft[p.id] ?? p.result}
+                                                                                                    onValueChange={(v) => setResultDraft(prev => ({ ...prev, [p.id]: v }))}
+                                                                                                >
+                                                                                                    <SelectTrigger className="h-8 w-32 text-sm">
+                                                                                                        <SelectValue placeholder="Set result" />
+                                                                                                    </SelectTrigger>
+                                                                                                    <SelectContent>
+                                                                                                        <SelectItem value="1-0">1-0 (White)</SelectItem>
+                                                                                                        <SelectItem value="1/2-1/2">1/2-1/2 (Draw)</SelectItem>
+                                                                                                        <SelectItem value="0-1">0-1 (Black)</SelectItem>
+                                                                                                    </SelectContent>
+                                                                                                </Select>
+                                                                                                <Button size="sm" variant="outline" onClick={() => handleSavePairingResult(t.id, p.id, resultDraft[p.id] ?? p.result)} disabled={savingResultId === p.id || !(resultDraft[p.id] ?? p.result)} className="text-blue-600 hover:text-blue-700">
+                                                                                                    {savingResultId === p.id ? 'Saving...' : (p.result ? 'Update' : 'Save')}
+                                                                                                </Button>
+                                                                                            </div>
+                                                                                        ) : (
+                                                                                            <Badge variant="secondary" className="text-[11px]">1 (bye)</Badge>
+                                                                                        )}
+                                                                                    </TableCell>
+                                                                                </TableRow>
+                                                                            ))}
+                                                                    </TableBody>
+                                                                </Table>
+                                                            </div>
+                                                            )}
+                                                        </div>
+                                                    ))
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })
+                            ) : (
+                                <div className="text-gray-500 py-6">Select a tournament to view pairings.</div>
+                            )}
+                            {tournaments.length === 0 && (
+                                <div className="text-center py-8 text-gray-500">No tournaments found.</div>
+                            )}
+                        </div>
                     </CardContent>
                 </Card>
             )}
 
             {activeTab === 'results' && (
-                <Card>
-                    <CardHeader className="flex flex-row items-center justify-between">
+                <Card className="w-full">
+                    <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                         <CardTitle>Results</CardTitle>
-                        <Button variant="outline" size="sm" onClick={fetchAllData}>🔄 Refresh</Button>
+                        <div className="flex items-center gap-2">
+                            <span className="text-sm text-gray-600">Select tournament</span>
+                            <Select value={selectedResultsTournamentId ? String(selectedResultsTournamentId) : ''} onValueChange={(v) => setSelectedResultsTournamentId(v)}>
+                                <SelectTrigger className="w-[220px]">
+                                    <SelectValue placeholder="Select tournament" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {tournaments.map((t) => (
+                                        <SelectItem key={`results-sel-${t.id}`} value={String(t.id)}>{t.name}</SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                            <Button variant="outline" size="sm" onClick={fetchAllData}>🔄 Refresh</Button>
+                        </div>
                     </CardHeader>
                     <CardContent>
-                        <Table>
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead>Tournament</TableHead>
-                                    <TableHead>Type</TableHead>
-                                    <TableHead>Rounds</TableHead>
-                                    <TableHead>Actions</TableHead>
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {tournaments.map((t) => (
-                                    <React.Fragment key={`res-row-${t.id}`}>
-                                        <TableRow>
-                                            <TableCell className="font-medium">{t.name}</TableCell>
+                        <div className="overflow-x-auto -mx-2 sm:mx-0">
+<Table className="w-full">
+                                <TableHeader>
+                                    <TableRow>
+                                        <TableHead>Tournament</TableHead>
+                                        <TableHead className="hidden sm:table-cell">Type</TableHead>
+                                        <TableHead>Rounds</TableHead>
+                                        <TableHead>Actions</TableHead>
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                {selectedResultsTournamentId ? (
+                                    tournaments.filter(t => t.id === selectedResultsTournamentId).map((t) => (
+                                        <React.Fragment key={`res-row-${t.id}`}>
+                                            <TableRow>
+                                                <TableCell className="font-medium">{t.name}</TableCell>
                                             <TableCell className="capitalize">{t.tournament_type || 'swiss'}</TableCell>
                                             <TableCell>{t.rounds}</TableCell>
                                             <TableCell>
@@ -1842,9 +2450,17 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
                                             </TableRow>
                                         )}
                                     </React.Fragment>
-                                ))}
-                            </TableBody>
-                        </Table>
+                                ))
+                                ) : (
+                                    <TableRow>
+                                        <TableCell colSpan={4}>
+                                            <div className="text-gray-500 py-4">Select a tournament to view results.</div>
+                                        </TableCell>
+                                    </TableRow>
+                                )}
+                                </TableBody>
+                            </Table>
+                        </div>
                         {tournaments.length === 0 && (
                             <div className="text-center py-8 text-gray-500">No tournaments found.</div>
                         )}
@@ -1859,6 +2475,167 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
             {renderTournamentDialog()}
             {renderPlayerDialog()}
             {renderAddPlayersDialog()}
+            {renderPlayerDetailsDialog()}
+            {/* Mobile drawer */}
+            {mobileNavOpen && (
+                <div className="fixed inset-0 z-50 md:hidden">
+                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setMobileNavOpen(false)} />
+                    <div className="absolute left-0 top-0 h-full w-80 bg-gradient-to-br from-slate-50 via-white to-blue-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 border-r border-slate-200/50 dark:border-gray-700/50 shadow-2xl p-6">
+                        {/* Mobile Header */}
+                        <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-200/50 dark:border-gray-700/50">
+                            <div className="flex items-center gap-2">
+                                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-amber-500 to-orange-500 flex items-center justify-center">
+                                    <Crown className="h-4 w-4 text-white" />
+                                </div>
+                                <div>
+                                    <div className="font-semibold text-slate-800 dark:text-gray-100">Admin Panel</div>
+                                    <div className="text-xs text-slate-500 dark:text-gray-400">Manage tournaments</div>
+                                </div>
+                            </div>
+                            <Button variant="ghost" size="icon" onClick={() => setMobileNavOpen(false)} className="h-8 w-8 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800">
+                                <X className="h-4 w-4" />
+                            </Button>
+                        </div>
+
+                        {/* Mobile Navigation */}
+                        <nav className="space-y-2">
+                            <button 
+                                onClick={() => { setActiveTab('tournaments'); setMobileNavOpen(false); }} 
+                                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 ${
+                                    activeTab === 'tournaments'
+                                        ? 'bg-gradient-to-r from-amber-500/10 to-orange-500/10 text-amber-700 dark:text-amber-400 border border-amber-200/50 dark:border-amber-500/30 shadow-lg'
+                                        : 'text-slate-600 hover:text-slate-800 hover:bg-slate-100/80 dark:text-gray-300 dark:hover:text-gray-100 dark:hover:bg-gray-800/80'
+                                }`}
+                            >
+                                <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
+                                    activeTab === 'tournaments'
+                                        ? 'bg-gradient-to-br from-amber-500 to-orange-500 text-white'
+                                        : 'bg-slate-200/80 text-slate-600 dark:bg-gray-700 dark:text-gray-300'
+                                }`}>
+                                    <Trophy className="h-4 w-4" />
+                                </div>
+                                <div className="flex-1 flex items-center justify-between">
+                                    <span>Tournaments</span>
+                                    <span className={`text-xs px-2 py-1 rounded-full font-medium ${
+                                        activeTab === 'tournaments'
+                                            ? 'bg-amber-200/50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+                                            : 'bg-slate-200/80 text-slate-500 dark:bg-gray-700/50 dark:text-gray-400'
+                                    }`}>
+                                        {tournaments.length}
+                                    </span>
+                                </div>
+                            </button>
+
+                            <button 
+                                onClick={() => { setActiveTab('players'); setMobileNavOpen(false); }} 
+                                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 ${
+                                    activeTab === 'players'
+                                        ? 'bg-gradient-to-r from-blue-500/10 to-indigo-500/10 text-blue-700 dark:text-blue-400 border border-blue-200/50 dark:border-blue-500/30 shadow-lg'
+                                        : 'text-slate-600 hover:text-slate-800 hover:bg-slate-100/80 dark:text-gray-300 dark:hover:text-gray-100 dark:hover:bg-gray-800/80'
+                                }`}
+                            >
+                                <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
+                                    activeTab === 'players'
+                                        ? 'bg-gradient-to-br from-blue-500 to-indigo-500 text-white'
+                                        : 'bg-slate-200/80 text-slate-600 dark:bg-gray-700 dark:text-gray-300'
+                                }`}>
+                                    <Users className="h-4 w-4" />
+                                </div>
+                                <div className="flex-1 flex items-center justify-between">
+                                    <span>Players</span>
+                                    <span className={`text-xs px-2 py-1 rounded-full font-medium ${
+                                        activeTab === 'players'
+                                            ? 'bg-blue-200/50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'
+                                            : 'bg-slate-200/80 text-slate-500 dark:bg-gray-700/50 dark:text-gray-400'
+                                    }`}>
+                                        {players.length}
+                                    </span>
+                                </div>
+                            </button>
+
+                            <button 
+                                onClick={() => { setActiveTab('requests'); setMobileNavOpen(false); }} 
+                                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 ${
+                                    activeTab === 'requests'
+                                        ? 'bg-gradient-to-r from-purple-500/10 to-pink-500/10 text-purple-700 dark:text-purple-400 border border-purple-200/50 dark:border-purple-500/30 shadow-lg'
+                                        : 'text-slate-600 hover:text-slate-800 hover:bg-slate-100/80 dark:text-gray-300 dark:hover:text-gray-100 dark:hover:bg-gray-800/80'
+                                }`}
+                            >
+                                <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-colors relative ${
+                                    activeTab === 'requests'
+                                        ? 'bg-gradient-to-br from-purple-500 to-pink-500 text-white'
+                                        : 'bg-slate-200/80 text-slate-600 dark:bg-gray-700 dark:text-gray-300'
+                                }`}>
+                                    <Clock className="h-4 w-4" />
+                                    {requests.filter(r => r.status === 'pending').length > 0 && (
+                                        <div className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full border-2 border-white dark:border-gray-800 animate-pulse"></div>
+                                    )}
+                                </div>
+                                <div className="flex-1 flex items-center justify-between">
+                                    <span>Requests</span>
+                                    <span className={`text-xs px-2 py-1 rounded-full font-medium ${
+                                        requests.filter(r => r.status === 'pending').length > 0
+                                            ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300 animate-pulse'
+                                            : activeTab === 'requests'
+                                                ? 'bg-purple-200/50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300'
+                                                : 'bg-slate-200/80 text-slate-500 dark:bg-gray-700/50 dark:text-gray-400'
+                                    }`}>
+                                        {requests.filter(r => r.status === 'pending').length}
+                                    </span>
+                                </div>
+                            </button>
+
+                            <button 
+                                onClick={() => { setActiveTab('pairings'); setMobileNavOpen(false); }} 
+                                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 ${
+                                    activeTab === 'pairings'
+                                        ? 'bg-gradient-to-r from-green-500/10 to-emerald-500/10 text-green-700 dark:text-green-400 border border-green-200/50 dark:border-green-500/30 shadow-lg'
+                                        : 'text-slate-600 hover:text-slate-800 hover:bg-slate-100/80 dark:text-gray-300 dark:hover:text-gray-100 dark:hover:bg-gray-800/80'
+                                }`}
+                            >
+                                <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
+                                    activeTab === 'pairings'
+                                        ? 'bg-gradient-to-br from-green-500 to-emerald-500 text-white'
+                                        : 'bg-slate-200/80 text-slate-600 dark:bg-gray-700 dark:text-gray-300'
+                                }`}>
+                                    <Target className="h-4 w-4" />
+                                </div>
+                                <div className="flex-1">
+                                    <span>Pairings</span>
+                                </div>
+                            </button>
+
+                            <button 
+                                onClick={() => { setActiveTab('results'); setMobileNavOpen(false); }} 
+                                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 ${
+                                    activeTab === 'results'
+                                        ? 'bg-gradient-to-r from-rose-500/10 to-pink-500/10 text-rose-700 dark:text-rose-400 border border-rose-200/50 dark:border-rose-500/30 shadow-lg'
+                                        : 'text-slate-600 hover:text-slate-800 hover:bg-slate-100/80 dark:text-gray-300 dark:hover:text-gray-100 dark:hover:bg-gray-800/80'
+                                }`}
+                            >
+                                <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
+                                    activeTab === 'results'
+                                        ? 'bg-gradient-to-br from-rose-500 to-pink-500 text-white'
+                                        : 'bg-slate-200/80 text-slate-600 dark:bg-gray-700 dark:text-gray-300'
+                                }`}>
+                                    <BarChart3 className="h-4 w-4" />
+                                </div>
+                                <div className="flex-1">
+                                    <span>Results</span>
+                                </div>
+                            </button>
+                        </nav>
+
+                        {/* Mobile Footer */}
+                        <div className="mt-8 pt-6 border-t border-slate-200/50 dark:border-gray-700/50">
+                            <div className="flex items-center justify-center gap-2 text-xs text-slate-400 dark:text-gray-500">
+                                <Gamepad2 className="h-3 w-3" />
+                                <span>Chess Results Admin</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

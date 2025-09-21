@@ -85,7 +85,9 @@ const playerCreateSchema = Joi.object({
     name: Joi.string().required(),
     rating: Joi.number().integer().min(0).default(0),
     title: Joi.string().valid(...Object.values(PlayerTitle)).default(''),
-    birth_year: Joi.number().integer().min(1900).max(new Date().getFullYear()).optional()
+    birth_year: Joi.number().integer().min(1900).max(new Date().getFullYear()).optional(),
+    email: Joi.string().email().optional(),
+    phone: Joi.string().pattern(/^[0-9+()\-\s]{7,20}$/).optional()
 });
 
 const tournamentCreateSchema = Joi.object({
@@ -737,17 +739,39 @@ app.post('/api/players', authenticateToken, asyncHandler(async (req, res) => {
 }));
 
 app.get('/api/players', asyncHandler(async (req, res) => {
-    let query = {};
-    if (req.query.search) {
-        query.name = { $regex: req.query.search, $options: 'i' };
+    const search = (req.query.search || '').toString().trim();
+    const pipeline = [];
+
+    if (search) {
+        pipeline.push({ $match: { name: { $regex: search, $options: 'i' } } });
     }
 
-    const players = await db.collection('players').find(query).limit(1000).toArray();
+    // If players are linked to users, include their email and phone as fallbacks when player.email/phone is missing
+    pipeline.push(
+        { $lookup: { from: 'users', localField: 'user_id', foreignField: 'id', as: 'user' } },
+        { $addFields: { linked_email: { $arrayElemAt: ['$user.email', 0] } } },
+        { $addFields: { linked_phone: { $arrayElemAt: ['$user.phone', 0] } } },
+        { $addFields: { email: { $ifNull: ['$email', '$linked_email'] } } },
+        { $addFields: { phone: { $ifNull: ['$phone', '$linked_phone'] } } },
+        { $project: { user: 0, linked_email: 0, linked_phone: 0 } }
+    );
+
+    const players = await db.collection('players').aggregate(pipeline).limit(1000).toArray();
     res.json(players);
 }));
 
 app.get('/api/players/:player_id', asyncHandler(async (req, res) => {
-    const player = await db.collection('players').findOne({ id: req.params.player_id });
+    const pipeline = [
+        { $match: { id: req.params.player_id } },
+        { $lookup: { from: 'users', localField: 'user_id', foreignField: 'id', as: 'user' } },
+        { $addFields: { linked_email: { $arrayElemAt: ['$user.email', 0] } } },
+        { $addFields: { linked_phone: { $arrayElemAt: ['$user.phone', 0] } } },
+        { $addFields: { email: { $ifNull: ['$email', '$linked_email'] } } },
+        { $addFields: { phone: { $ifNull: ['$phone', '$linked_phone'] } } },
+        { $project: { user: 0, linked_email: 0, linked_phone: 0 } }
+    ];
+    const results = await db.collection('players').aggregate(pipeline).toArray();
+    const player = results[0];
     if (!player) {
         return res.status(404).json({ error: 'Player not found' });
     }

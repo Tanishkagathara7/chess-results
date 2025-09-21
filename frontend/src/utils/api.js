@@ -22,10 +22,23 @@ export const api = {
         const response = await fetch(url, config);
 
         if (!response.ok) {
-            throw new Error(`API call failed: ${response.status} ${response.statusText}`);
+            let bodyText = '';
+            try {
+                bodyText = await response.text();
+            } catch (_) {}
+            const msg = bodyText || response.statusText || 'Request failed';
+            const err = new Error(`HTTP ${response.status}: ${msg}`);
+            err.status = response.status;
+            err.body = bodyText;
+            throw err;
         }
 
-        return response.json();
+        // Return JSON if present, otherwise null
+        try {
+            return await response.json();
+        } catch (_) {
+            return null;
+        }
     },
 
     async get(endpoint, options = {}) {

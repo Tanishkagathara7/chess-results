@@ -104,7 +104,9 @@ const Sidebar = ({ open, setOpen, onNavigate, current = 'home' }) => {
   const items = [
     { key: 'home', label: 'Home', icon: HomeIcon, to: '/home' },
     { key: 'tournaments', label: 'Tournaments', icon: Trophy, to: '/tournaments' },
-    ...(user?.role === 'admin' ? [] : [{ key: 'profile', label: 'Profile', icon: Users, to: '/profile' }]),
+    ...(user?.role === 'admin'
+      ? [{ key: 'admin', label: 'Admin', icon: Award, to: '/admin' }]
+      : [{ key: 'profile', label: 'Profile', icon: Users, to: '/profile' }]),
     { key: 'notifications', label: 'Notifications', icon: Bell, to: '/notifications' },
     { key: 'about', label: 'About', icon: Info, to: '/about' },
     { key: 'settings', label: 'Settings', icon: Settings, to: '/settings' },

@@ -40,8 +40,13 @@ export const NotificationProvider = ({ children }) => {
         try {
             setLoading(true);
             const response = await api.get(`/api/notifications?limit=${limit}`);
-            setNotifications(response);
+            setNotifications(response || []);
         } catch (error) {
+            // Gracefully ignore auth errors
+            if (error?.status === 401 || error?.status === 403) {
+                setNotifications([]);
+                return;
+            }
             console.error('Error fetching notifications:', error);
         } finally {
             setLoading(false);
@@ -51,8 +56,13 @@ export const NotificationProvider = ({ children }) => {
     const fetchUnreadCount = async () => {
         try {
             const response = await api.get('/api/notifications/unread-count');
-            setUnreadCount(response.unread_count);
+            setUnreadCount(response?.unread_count ?? 0);
         } catch (error) {
+            // Treat auth errors as zero unread silently
+            if (error?.status === 401 || error?.status === 403) {
+                setUnreadCount(0);
+                return;
+            }
             console.error('Error fetching unread count:', error);
         }
     };
