@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import "./App.css";
 import { BrowserRouter, Routes, Route, Link, useNavigate, useParams } from "react-router-dom";
 import axios from "axios";
-import { Search, Trophy, Users, Globe, Plus, Edit, Trash2, Download, LogOut, Award, Home as HomeIcon, Settings, Eye, Menu } from "lucide-react";
+import { Search, Trophy, Users, Globe, Plus, Edit, Trash2, Download, LogOut, Award, Home as HomeIcon, Settings, Eye, Menu, Bell, Info, ArrowLeft } from "lucide-react";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { NotificationProvider } from "./contexts/NotificationContext";
 import NotificationDropdown from "./components/NotificationDropdown";
@@ -94,12 +94,21 @@ const Header = ({ searchQuery, setSearchQuery, onSearch, showAuthButton = false 
 // Sidebar for dashboard
 const Sidebar = ({ open, setOpen, onNavigate, current = 'home' }) => {
   const { theme } = useTheme();
+  const { user } = useAuth();
   const asideBg = theme === 'light' ? 'bg-white/90 border-slate-200' : 'bg-slate-900/95 border-slate-800';
   const headerText = theme === 'light' ? 'text-slate-900' : 'text-slate-100';
   const navDefault = theme === 'light' ? 'text-slate-700 hover:bg-slate-100 hover:text-slate-900' : 'text-slate-300 hover:bg-slate-800 hover:text-slate-100';
   const navActive = theme === 'light' ? 'bg-amber-500/10 text-amber-700' : 'bg-amber-500/15 text-amber-400';
   const borderColor = theme === 'light' ? 'border-slate-200' : 'border-slate-800';
   const iconColor = theme === 'light' ? 'text-slate-500 hover:text-slate-700' : 'text-slate-400 hover:text-slate-200';
+  const items = [
+    { key: 'home', label: 'Home', icon: HomeIcon, to: '/home' },
+    { key: 'tournaments', label: 'Tournaments', icon: Trophy, to: '/tournaments' },
+    ...(user?.role === 'admin' ? [] : [{ key: 'profile', label: 'Profile', icon: Users, to: '/profile' }]),
+    { key: 'notifications', label: 'Notifications', icon: Bell, to: '/notifications' },
+    { key: 'about', label: 'About', icon: Info, to: '/about' },
+    { key: 'settings', label: 'Settings', icon: Settings, to: '/settings' },
+  ];
   return (
     <aside className={`fixed z-40 inset-y-0 left-0 w-64 transform ${asideBg} backdrop-blur border-r transition-transform duration-300 ${open ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0`}>
       <div className={`h-16 flex items-center px-4 border-b ${borderColor}`}>
@@ -109,12 +118,7 @@ const Sidebar = ({ open, setOpen, onNavigate, current = 'home' }) => {
         </div>
       </div>
       <nav className="p-4 space-y-1">
-        {[
-          { key: 'home', label: 'Home', icon: HomeIcon, to: '/home' },
-          { key: 'tournaments', label: 'Tournaments', icon: Trophy, to: '/tournaments' },
-          { key: 'profile', label: 'Profile', icon: Users, to: '/profile' },
-          { key: 'settings', label: 'Settings', icon: Settings, to: '/settings' },
-        ].map(item => (
+        {items.map(item => (
           <button key={item.key} onClick={() => { onNavigate(item.to); setOpen(false); }} className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-left transition-colors ${current === item.key ? navActive : navDefault}`}>
             <item.icon className="h-5 w-5" />
             <span className="font-medium">{item.label}</span>
@@ -233,15 +237,6 @@ const Home = () => {
                 </CardContent>
               </Card>
 
-              <Card className={`cursor-pointer ${cardBg} hover:border-amber-400/60 hover:shadow-xl hover:shadow-amber-900/20 transition-all rounded-xl`} onClick={() => navigate('/profile')}>
-                <CardContent className="p-8 text-center">
-                  <div className="mx-auto h-16 w-16 grid place-items-center rounded-full bg-amber-500/15 text-amber-400 mb-4">
-                    <Users className="h-8 w-8" />
-                  </div>
-                  <h3 className="text-xl font-semibold mb-2">My Profile</h3>
-                  <p className={`${textSubtle}`}>View your tournament history, ratings, and achievements</p>
-                </CardContent>
-              </Card>
             </>
           ) : (
             <Card className={`cursor-pointer ${cardBg} hover:border-amber-400/60 hover:shadow-xl hover:shadow-amber-900/20 transition-all rounded-xl`} onClick={() => navigate('/profile')}>
@@ -1041,6 +1036,196 @@ const Players = () => {
   );
 };
 
+// Settings Page
+const SettingsPage = () => {
+  const { theme } = useTheme();
+  const pageBg = theme === 'light' ? 'bg-slate-50 text-slate-900' : 'bg-slate-900 text-slate-100';
+  const barBg = theme === 'light' ? 'bg-white/80 border-slate-200' : 'bg-slate-900/60 border-slate-800/80';
+  const cardBg = theme === 'light' ? 'bg-white border-slate-200' : 'bg-slate-800/60 border-slate-700';
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const navigate = useNavigate();
+  const { user } = useAuth();
+
+  return (
+    <div className={`min-h-screen ${pageBg}`}>
+      <Sidebar open={sidebarOpen} setOpen={setSidebarOpen} onNavigate={(to) => navigate(to)} current="settings" />
+      {sidebarOpen && <div className="fixed inset-0 z-30 bg-black/40 md:hidden" onClick={() => setSidebarOpen(false)} />}
+      {/* Desktop quick-access theme toggle */}
+      <div className="hidden md:block fixed top-3 right-4 z-40">
+        <ThemeToggle />
+      </div>
+      <div className="md:pl-64">
+        {/* Top bar for mobile */}
+        <div className={`h-16 flex items-center px-4 border-b ${barBg} backdrop-blur sticky top-0 z-30 md:hidden`}>
+          <button className="text-slate-300" onClick={() => setSidebarOpen((o) => !o)}>
+            <Menu className="h-6 w-6" />
+          </button>
+          <div className="ml-3 flex items-center gap-2">
+            <Trophy className="h-6 w-6 text-amber-500" />
+            <span className="font-semibold">ChessTournaments</span>
+          </div>
+          <div className="ml-auto">
+            <ThemeToggle />
+          </div>
+        </div>
+
+        <main className="px-6 md:px-10 py-8">
+          <div className="mb-3">
+<Button variant="ghost" size="sm" onClick={() => navigate('/home')} className="px-2 text-amber-400 hover:bg-amber-500/10">
+              <ArrowLeft className="h-5 w-5 mr-1" /> Back
+            </Button>
+          </div>
+          <h1 className="text-3xl font-bold mb-6">Settings</h1>
+
+          <div className="grid md:grid-cols-2 gap-6">
+            <Card className={`${cardBg} rounded-xl`}>
+              <CardHeader>
+                <CardTitle>Appearance</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-medium">Theme</div>
+                    <div className="text-sm text-slate-600 dark:text-slate-300">Switch light/dark mode</div>
+                  </div>
+                  <ThemeToggle />
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className={`${cardBg} rounded-xl`}>
+              <CardHeader>
+                <CardTitle>Account</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-sm space-y-1">
+                  <div><span className="text-slate-500 dark:text-slate-300">Email: </span><span className="font-medium">{user?.email || '-'}</span></div>
+                  <div><span className="text-slate-500 dark:text-slate-300">Role: </span><span className="font-medium">{user?.role || '-'}</span></div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+};
+
+// About Page
+const AboutPage = () => {
+  const { theme } = useTheme();
+  const pageBg = theme === 'light' ? 'bg-slate-50 text-slate-900' : 'bg-slate-900 text-slate-100';
+  const barBg = theme === 'light' ? 'bg-white/80 border-slate-200' : 'bg-slate-900/60 border-slate-800/80';
+  const cardBg = theme === 'light' ? 'bg-white border-slate-200' : 'bg-slate-800/60 border-slate-700';
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const navigate = useNavigate();
+
+  return (
+    <div className={`min-h-screen ${pageBg}`}>
+      <Sidebar open={sidebarOpen} setOpen={setSidebarOpen} onNavigate={(to) => navigate(to)} current="about" />
+      {sidebarOpen && <div className="fixed inset-0 z-30 bg-black/40 md:hidden" onClick={() => setSidebarOpen(false)} />}
+      {/* Desktop quick-access theme toggle */}
+      <div className="hidden md:block fixed top-3 right-4 z-40">
+        <ThemeToggle />
+      </div>
+      <div className="md:pl-64">
+        {/* Top bar for mobile */}
+        <div className={`h-16 flex items-center px-4 border-b ${barBg} backdrop-blur sticky top-0 z-30 md:hidden`}>
+          <button className="text-slate-300" onClick={() => setSidebarOpen((o) => !o)}>
+            <Menu className="h-6 w-6" />
+          </button>
+          <div className="ml-3 flex items-center gap-2">
+            <Trophy className="h-6 w-6 text-amber-500" />
+            <span className="font-semibold">ChessTournaments</span>
+          </div>
+          <div className="ml-auto">
+            <ThemeToggle />
+          </div>
+        </div>
+
+        <main className="px-6 md:px-10 py-10">
+          <div className="mb-3">
+<Button variant="ghost" size="sm" onClick={() => navigate('/home')} className="px-2 text-amber-400 hover:bg-amber-500/10">
+              <ArrowLeft className="h-5 w-5 mr-1" /> Back
+            </Button>
+          </div>
+          <div className="mb-8">
+            <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight flex items-center gap-3">
+              <Info className="h-8 w-8 text-amber-400" /> About ChessTournaments
+            </h1>
+            <p className="mt-3 text-lg md:text-xl text-slate-700 dark:text-slate-200 max-w-4xl">
+              A modern, accessible platform to organize tournaments, follow games, and share professional-looking results with the chess community.
+            </p>
+          </div>
+
+          {/* Developer highlight */}
+          <div className={`p-6 md:p-7 mb-8 rounded-xl border ${theme === 'light' ? 'bg-amber-50 border-amber-200' : 'bg-amber-900/20 border-amber-700/40'}`}>
+            <div className="text-2xl md:text-3xl font-bold text-amber-700 dark:text-amber-300">
+              Made and developed by Tanish Kagathara
+            </div>
+            <p className="mt-2 text-amber-700/90 dark:text-amber-200/90">
+              Thank you for using this project! Your feedback helps make it better with every release.
+            </p>
+          </div>
+
+          <div className="space-y-6">
+            <Card className={`${cardBg} rounded-xl`}>
+              <CardHeader>
+                <CardTitle className="text-2xl">Our Mission</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-slate-700 dark:text-slate-200">
+                  We aim to make chess tournament management simple and delightful for players, organizers, and clubs. The UI focuses on clarity, speed, and strong dark-mode accessibility.
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card className={`${cardBg} rounded-xl`}>
+              <CardHeader>
+                <CardTitle className="text-2xl">What You Can Do</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <ul className="list-disc pl-6 space-y-2 text-slate-700 dark:text-slate-200">
+                  <li>Browse upcoming events and view details</li>
+                  <li>Request to join tournaments and track registration status</li>
+                  <li>See final standings, player ratings, and round-by-round results</li>
+                  <li>Receive notifications for approvals and important updates</li>
+                  <li>Use admin tools to create tournaments and manage players</li>
+                </ul>
+              </CardContent>
+            </Card>
+
+            <Card className={`${cardBg} rounded-xl`}>
+              <CardHeader>
+                <CardTitle className="text-2xl">Tech Stack</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid md:grid-cols-2 gap-4 text-slate-700 dark:text-slate-200">
+                  <div><span className="font-semibold">Frontend:</span> React, Tailwind CSS, shadcn/ui, Lucide icons</div>
+                  <div><span className="font-semibold">Backend:</span> Node.js/Express API</div>
+                  <div><span className="font-semibold">Design:</span> Accessible dark/light themes with fine-tuned contrast</div>
+                  <div><span className="font-semibold">Build:</span> Modern React tooling</div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className={`${cardBg} rounded-xl`}>
+              <CardHeader>
+                <CardTitle className="text-2xl">Contact</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-slate-700 dark:text-slate-200">
+                  Have ideas or found a bug? Reach out to <span className="font-semibold">Tanish Kagathara</span> with your feedback.
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+};
+
 // Tournament Details Component
 const TournamentResults = () => {
   const { id } = useParams();
@@ -1133,7 +1318,7 @@ const TournamentResults = () => {
         <Sidebar open={sidebarOpen} setOpen={setSidebarOpen} onNavigate={(to) => navigate(to)} current="tournaments" />
         <div className="md:pl-64">
           <div className="h-16 flex items-center px-4 border-b border-slate-800/80 bg-slate-900/60 backdrop-blur sticky top-0 z-30 md:hidden">
-            <button className="text-slate-300" onClick={() => setSidebarOpen(true)}>
+            <button className="text-slate-300" onClick={() => setSidebarOpen(true)} aria-label="Menu">
               <Menu className="h-6 w-6" />
             </button>
             <div className="ml-3 flex items-center gap-2">
@@ -1188,7 +1373,7 @@ const TournamentResults = () => {
       </div>
       <div className="md:pl-64">
         <div className={`h-16 flex items-center px-4 border-b ${barBg} backdrop-blur sticky top-0 z-30 md:hidden`}>
-          <button className="text-slate-300" onClick={() => setSidebarOpen((o) => !o)}>
+          <button className="text-slate-300" onClick={() => setSidebarOpen((o) => !o)} aria-label="Menu">
             <Menu className="h-6 w-6" />
           </button>
           <div className="ml-3 flex items-center gap-2">
@@ -1201,6 +1386,12 @@ const TournamentResults = () => {
         </div>
         
         <main className="px-6 md:px-10 py-8">
+          {/* Local back button above tournament name */}
+          <div className="mb-3">
+            <Button variant="ghost" size="sm" onClick={() => navigate(-1)} className="px-2 text-amber-400 hover:bg-amber-500/10">
+              <ArrowLeft className="h-5 w-5 mr-1" /> Back
+            </Button>
+          </div>
           {/* Tournament Info */}
           <Card className={`mb-8 ${cardBg} rounded-xl`}>
             <CardHeader>
@@ -1447,10 +1638,20 @@ function App() {
                 <TournamentResults />
               </ProtectedRoute>
             } />
+            <Route path="/settings" element={
+              <ProtectedRoute>
+                <SettingsPage />
+              </ProtectedRoute>
+            } />
             <Route path="/admin" element={
               <AdminRoute>
                 <Admin />
               </AdminRoute>
+            } />
+            <Route path="/about" element={
+              <ProtectedRoute>
+                <AboutPage />
+              </ProtectedRoute>
             } />
             <Route path="/notifications" element={
               <ProtectedRoute>

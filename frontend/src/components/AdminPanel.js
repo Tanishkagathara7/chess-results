@@ -1192,66 +1192,72 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
                 </Alert>
             )}
 
-            {/* Tab Navigation */}
-            <div className="border-b border-gray-200">
-                <nav className="-mb-px flex space-x-8">
-                    <button
-                        onClick={() => setActiveTab('tournaments')}
-                        className={`py-2 px-1 border-b-2 font-medium text-sm ${
-                            activeTab === 'tournaments'
-                                ? 'border-blue-500 text-blue-600'
-                                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                        }`}
-                    >
-                        <Trophy className="h-4 w-4 inline mr-2" />
-                        Tournaments ({tournaments.length})
-                    </button>
-                    <button
-                        onClick={() => setActiveTab('players')}
-                        className={`py-2 px-1 border-b-2 font-medium text-sm ${
-                            activeTab === 'players'
-                                ? 'border-blue-500 text-blue-600'
-                                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                        }`}
-                    >
-                        <Users className="h-4 w-4 inline mr-2" />
-                        Players ({players.length})
-                    </button>
-                    <button
-                        onClick={() => setActiveTab('requests')}
-                        className={`py-2 px-1 border-b-2 font-medium text-sm ${
-                            activeTab === 'requests'
-                                ? 'border-blue-500 text-blue-600'
-                                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                        }`}
-                    >
-                        <Clock className="h-4 w-4 inline mr-2" />
-                        Requests ({requests.filter(r => r.status === 'pending').length})
-                    </button>
-                    <button
-                        onClick={() => setActiveTab('pairings')}
-                        className={`py-2 px-1 border-b-2 font-medium text-sm ${
-                            activeTab === 'pairings'
-                                ? 'border-blue-500 text-blue-600'
-                                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                        }`}
-                    >
-                        Pairings
-                    </button>
-                    <button
-                        onClick={() => setActiveTab('results')}
-                        className={`py-2 px-1 border-b-2 font-medium text-sm ${
-                            activeTab === 'results'
-                                ? 'border-blue-500 text-blue-600'
-                                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                        }`}
-                    >
-                        Results
-                    </button>
-                </nav>
-            </div>
+            {/* Layout with sidebar */}
+            <div className="md:grid md:grid-cols-[220px,1fr] gap-6">
+                {/* Sidebar */}
+                <aside className="rounded-lg border border-gray-200 bg-white/70 dark:bg-gray-900/60 dark:border-gray-800 p-3 h-fit sticky top-20">
+                    <div className="space-y-1">
+                        <button
+                            onClick={() => setActiveTab('tournaments')}
+                            className={`w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                                activeTab === 'tournaments'
+                                    ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                                    : 'text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800'
+                            }`}
+                        >
+                            <Trophy className="h-4 w-4" />
+                            <span>Tournaments</span>
+                            <span className="ml-auto text-xs opacity-70">{tournaments.length}</span>
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('players')}
+                            className={`w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                                activeTab === 'players'
+                                    ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                                    : 'text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800'
+                            }`}
+                        >
+                            <Users className="h-4 w-4" />
+                            <span>Players</span>
+                            <span className="ml-auto text-xs opacity-70">{players.length}</span>
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('requests')}
+                            className={`w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                                activeTab === 'requests'
+                                    ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                                    : 'text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800'
+                            }`}
+                        >
+                            <Clock className="h-4 w-4" />
+                            <span>Requests</span>
+                            <span className="ml-auto text-xs opacity-70">{requests.filter(r => r.status === 'pending').length}</span>
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('pairings')}
+                            className={`w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                                activeTab === 'pairings'
+                                    ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                                    : 'text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800'
+                            }`}
+                        >
+                            <span>Pairings</span>
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('results')}
+                            className={`w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                                activeTab === 'results'
+                                    ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                                    : 'text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800'
+                            }`}
+                        >
+                            <span>Results</span>
+                        </button>
+                    </div>
+                </aside>
 
-            {/* Content */}
+                {/* Content */}
+                <div className="space-y-6">
             {activeTab === 'tournaments' && (
                 <Card>
                     <CardHeader className="flex flex-row items-center justify-between">
@@ -1846,6 +1852,8 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
                 </Card>
             )}
 
+                </div>
+            </div>
 
             {/* Dialogs */}
             {renderTournamentDialog()}

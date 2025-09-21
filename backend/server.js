@@ -800,8 +800,23 @@ app.post('/api/tournaments', authenticateToken, asyncHandler(async (req, res) =>
 }));
 
 app.get('/api/tournaments', asyncHandler(async (req, res) => {
-    // Use aggregation to include participant counts
-    const tournaments = await db.collection('tournaments').aggregate([
+    // Optional text search by name/location
+    const search = (req.query.search || '').toString().trim();
+    const pipeline = [];
+
+    if (search.length > 0) {
+        pipeline.push({
+            $match: {
+                $or: [
+                    { name: { $regex: search, $options: 'i' } },
+                    { location: { $regex: search, $options: 'i' } }
+                ]
+            }
+        });
+    }
+
+    // Include participant counts
+    pipeline.push(
         {
             $lookup: {
                 from: 'tournament_participants',
@@ -821,20 +836,12 @@ app.get('/api/tournaments', asyncHandler(async (req, res) => {
                 as: 'participants'
             }
         },
-        {
-            $addFields: {
-                participant_count: { $size: '$participants' }
-            }
-        },
-        {
-            $project: {
-                participants: 0  // Remove the participants array, keep only the count
-            }
-        },
-        {
-            $limit: 1000
-        }
-    ]).toArray();
+        { $addFields: { participant_count: { $size: '$participants' } } },
+        { $project: { participants: 0 } },
+        { $limit: 1000 }
+    );
+
+    const tournaments = await db.collection('tournaments').aggregate(pipeline).toArray();
     
     res.json(tournaments);
 }));

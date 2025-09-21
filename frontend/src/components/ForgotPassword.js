@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Button } from './ui/button';
+import backgroundImg from '../img/background.jpeg';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:3001';
 const API = `${BACKEND_URL}/api`;
@@ -35,17 +36,24 @@ const ForgotPassword = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-indigo-50 flex items-center justify-center p-4">
+    <div className="relative min-h-screen flex items-center justify-center py-10 px-4">
+      {/* Background image with overlay and bottom fade */}
+      <div className="absolute inset-0">
+        <img src={backgroundImg} alt="" className="w-full h-full object-cover" />
+        <div className="absolute inset-0 bg-black/50" />
+        <div className="absolute inset-x-0 bottom-0 h-28 md:h-36 bg-gradient-to-b from-transparent to-white" />
+      </div>
+
       <Button
         variant="ghost"
         onClick={() => navigate('/auth')}
-        className="absolute top-4 left-4 text-gray-600 hover:text-gray-900"
+        className="absolute top-4 left-4 text-amber-100 hover:text-amber-200"
       >
         <ArrowLeft className="h-4 w-4 mr-2" />
         Back to Sign In
       </Button>
 
-      <div className="w-full max-w-md">
+      <div className="relative w-full max-w-md">
         <Card className="shadow-lg">
           <CardHeader>
             <CardTitle className="text-center">Forgot Password</CardTitle>
