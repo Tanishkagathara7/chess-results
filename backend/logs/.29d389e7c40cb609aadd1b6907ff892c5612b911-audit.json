@@ -14,6 +14,16 @@
             "date": 1758427414303,
             "name": "D:\\chess-results\\backend\\logs\\error-2025-09-21.log",
             "hash": "4116ebe1b3a7c78356102881b6e813e05281f94fd8aba7b56b249bc160c43705"
+        },
+        {
+            "date": 1758520748698,
+            "name": "D:\\chess-results\\backend\\logs\\error-2025-09-22.log",
+            "hash": "b41297de94f020b888d4bcc5ba955a2da5a6f0a323d72d3f7da354acd587a949"
+        },
+        {
+            "date": 1758631051955,
+            "name": "D:\\chess-results\\backend\\logs\\error-2025-09-23.log",
+            "hash": "23ddf89f139b1c75539bd5950276e7e547db0bd34d2be9c51e96f6988c1b0b1e"
         }
     ],
     "hashType": "sha256"
