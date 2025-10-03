@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Badge } from './ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Alert, AlertDescription } from './ui/alert';
-import { Trophy, Users, Plus, Edit, Trash2, Calendar, MapPin, AlertCircle, Clock, CheckCircle, XCircle, Menu, X, ArrowLeft, Eye, Phone, Mail, Target, BarChart3, Gamepad2, Crown, Save } from 'lucide-react';
+import { Trophy, Users, Plus, Edit, Trash2, Calendar, MapPin, AlertCircle, Clock, CheckCircle, XCircle, Menu, X, ArrowLeft, Eye, Phone, Mail, Target, BarChart3, Gamepad2, Crown, Save, Link as LinkIcon } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { validateTournamentForm, formatDateError } from '../utils/validation';
 
@@ -38,8 +38,7 @@ const AdminPanel = () => {
         rounds: '',
         time_control: '',
         arbiter: '',
-        tournament_type: 'swiss',
-        round_eliminations: []
+        tournament_type: 'swiss'
     });
     
     const [playerForm, setPlayerForm] = useState({
@@ -205,6 +204,29 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
     };
 
     // Tournament operations
+    const copyJoinLink = async (tournament) => {
+        try {
+            const frontendBase = window.location.origin;
+            const joinUrl = `${frontendBase}/join/${tournament.id}`;
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(joinUrl);
+            } else {
+                // Fallback for older browsers
+                const el = document.createElement('textarea');
+                el.value = joinUrl;
+                document.body.appendChild(el);
+                el.select();
+                document.execCommand('copy');
+                document.body.removeChild(el);
+            }
+            showMessage('Join link copied to clipboard');
+        } catch (e) {
+            console.error('Copy join link failed', e);
+            showMessage('Failed to copy link', true);
+        }
+    }; 
+
+    // Tournament operations
     const handleTournamentSubmit = async (e) => {
         e.preventDefault();
         
@@ -255,8 +277,7 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
             rounds: tournament.rounds.toString(),
             time_control: tournament.time_control,
             arbiter: tournament.arbiter,
-            tournament_type: tournament.tournament_type || 'swiss',
-            round_eliminations: tournament.round_eliminations || []
+            tournament_type: tournament.tournament_type || 'swiss'
         });
         setEditingId(tournament.id);
         setIsDialogOpen(true);
@@ -283,8 +304,7 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
             rounds: '',
             time_control: '',
             arbiter: '',
-            tournament_type: 'swiss',
-            round_eliminations: []
+            tournament_type: 'swiss'
         });
         setEditingId(null);
         setValidationErrors({});
@@ -294,49 +314,11 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
     const handleTournamentFormChange = (field, value) => {
         const newForm = { ...tournamentForm, [field]: value };
         
-        // If tournament type changes to knockout, initialize round eliminations
-        if (field === 'tournament_type' && value === 'knockout' && tournamentForm.rounds) {
-            const rounds = parseInt(tournamentForm.rounds);
-            if (rounds > 0 && newForm.round_eliminations.length === 0) {
-                newForm.round_eliminations = Array.from({ length: rounds }, (_, i) => ({
-                    round: i + 1,
-                    eliminations: i === rounds - 1 ? 0 : 1 // Final round has no eliminations
-                }));
-            }
-        }
-        
-        // If rounds change and it's knockout, update round eliminations
-        if (field === 'rounds' && newForm.tournament_type === 'knockout') {
-            const rounds = parseInt(value);
-            if (rounds > 0) {
-                newForm.round_eliminations = Array.from({ length: rounds }, (_, i) => {
-                    const existing = newForm.round_eliminations.find(re => re.round === i + 1);
-                    return existing || {
-                        round: i + 1,
-                        eliminations: i === rounds - 1 ? 0 : 1 // Final round has no eliminations
-                    };
-                });
-            }
-        }
-        
         setTournamentForm(newForm);
         
         // Re-validate on change to provide real-time feedback
         const validation = validateTournamentForm(newForm);
         setValidationErrors(validation.errors);
-    };
-    
-    // Handle round elimination changes
-    const handleRoundEliminationChange = (roundIndex, eliminations) => {
-        const newEliminations = [...tournamentForm.round_eliminations];
-        newEliminations[roundIndex] = {
-            ...newEliminations[roundIndex],
-            eliminations: parseInt(eliminations) || 0
-        };
-        setTournamentForm({
-            ...tournamentForm,
-            round_eliminations: newEliminations
-        });
     };
 
     // Tournament participants functions
@@ -1306,59 +1288,6 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
                         )}
                     </div>
                     
-                    {/* Round Elimination Configuration for Knockout Tournaments */}
-                    {tournamentForm.tournament_type === 'knockout' && tournamentForm.rounds && (
-                        <div className="space-y-3">
-                            <Label>Round Eliminations</Label>
-                            <div className="bg-orange-50 border border-orange-200 rounded-md p-3 mb-3">
-                                <div className="flex">
-                                    <div className="flex-shrink-0">
-                                        <svg className="h-5 w-5 text-orange-400" viewBox="0 0 20 20" fill="currentColor">
-                                            <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                                        </svg>
-                                    </div>
-                                    <div className="ml-3">
-                                        <h3 className="text-sm font-medium text-orange-800">
-                                            Knockout Tournament Configuration
-                                        </h3>
-                                        <div className="mt-2 text-sm text-orange-700">
-                                            <p>Configure how many players are eliminated after each round. The final round typically has 0 eliminations (winner determined by game result).</p>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                                {tournamentForm.round_eliminations.map((roundElim, index) => (
-                                    <div key={index} className="space-y-1">
-                                        <Label className="text-xs font-medium">
-                                            Round {roundElim.round}
-                                            {index === tournamentForm.round_eliminations.length - 1 && (
-                                                <span className="text-gray-500"> (Final)</span>
-                                            )}
-                                        </Label>
-                                        <Input
-                                            type="number"
-                                            min="0"
-                                            max="50"
-                                            value={roundElim.eliminations}
-                                            onChange={(e) => handleRoundEliminationChange(index, e.target.value)}
-                                            className="text-sm"
-                                            placeholder="0"
-                                        />
-                                        <p className="text-xs text-gray-500">
-                                            {index === tournamentForm.round_eliminations.length - 1 
-                                                ? "Players eliminated" 
-                                                : "Eliminated"}
-                                        </p>
-                                    </div>
-                                ))}
-                            </div>
-                            <div className="text-xs text-gray-600 mt-2">
-                                <strong>Tip:</strong> For a proper knockout tournament, ensure the total eliminations across all rounds leaves exactly 1 winner.
-                            </div>
-                        </div>
-                    )}
-                    
                     <div>
                         <div className={`${tournamentForm.tournament_type === 'swiss' ? "bg-blue-50 border border-blue-200" : "bg-orange-50 border border-orange-200"} rounded-md p-3`}>
                             <div className="flex">
@@ -1375,7 +1304,7 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
                                         <p>
                                             {tournamentForm.tournament_type === 'swiss' 
                                                 ? 'This tournament will use the Swiss pairing system with color alternation and no eliminations.'
-                                                : 'This tournament will eliminate players after each round according to the configuration above, culminating in a final winner.'}
+                                                : 'This tournament will use a standard knockout format where players are paired each round, winners advance to the next round, and losers are eliminated until one champion remains.'}
                                         </p>
                                     </div>
                                 </div>
@@ -2083,6 +2012,15 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
                                                         title="Add Players"
                                                     >
                                                         <Users className="h-3 w-3" />
+                                                    </Button>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => copyJoinLink(tournament)}
+                                                        className="text-amber-600 hover:text-amber-700"
+                                                        title="Copy Join Link"
+                                                    >
+                                                        <LinkIcon className="h-3 w-3" />
                                                     </Button>
                                                     <Button
                                                         variant="outline"

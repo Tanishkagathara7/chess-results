@@ -12,6 +12,7 @@ import AdminPanel from "./components/AdminPanel";
 import LandingPage from "./components/LandingPage";
 import AuthPage from "./components/AuthPage";
 import NotificationsPage from "./components/NotificationsPage";
+import JoinTournamentPage from "./components/JoinTournamentPage";
 import ForgotPassword from "./components/ForgotPassword";
 import ResetPassword from "./components/ResetPassword";
 import { Button } from "./components/ui/button";
@@ -1942,6 +1943,8 @@ function App() {
                 <TournamentResults />
               </ProtectedRoute>
             } />
+            {/* Public join link that will prompt login and then auto-join */}
+            <Route path="/join/:id" element={<JoinTournamentPage />} />
             <Route path="/settings" element={
               <ProtectedRoute>
                 <SettingsPage />
