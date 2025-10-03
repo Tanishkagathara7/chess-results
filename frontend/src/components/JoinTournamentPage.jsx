@@ -81,8 +81,8 @@ export default function JoinTournamentPage() {
       if (res?.data?.token) {
         localStorage.setItem('token', res.data.token);
       }
-      setState({ status: 'success', message: res?.data?.message || 'Joined successfully!' });
-      setTimeout(() => navigate(`/tournaments/${id}`), 800);
+      // Show success and stay on the same page (no redirect)
+      setState({ status: 'success', message: res?.data?.message || 'Joined tournament successfully!' });
     } catch (err) {
       const msg = err.response?.data?.error || err.message || 'Failed to join';
       setState({ status: 'error', message: msg });
@@ -105,8 +105,13 @@ export default function JoinTournamentPage() {
           )}
           <CardTitle className="mt-1 text-base md:text-lg font-semibold text-slate-600">Join Tournament</CardTitle>
           {state.status === 'error' && (
-            <div className="mt-3 text-red-600 text-sm bg-red-50 border border-red-200 rounded px-3 py-2">
+            <div className="mt-3 text-red-700 text-sm bg-red-50 border border-red-200 rounded px-3 py-2">
               {state.message}
+            </div>
+          )}
+          {state.status === 'success' && (
+            <div className="mt-3 text-emerald-700 text-sm bg-emerald-50 border border-emerald-200 rounded px-3 py-2">
+              {state.message || 'Joined tournament successfully!'}
             </div>
           )}
         </CardHeader>
@@ -131,7 +136,7 @@ export default function JoinTournamentPage() {
             <div className="pt-2 flex items-center justify-between">
               <div className="text-xs text-slate-500">By joining, your name may appear on participant lists.</div>
               <Button type="submit" disabled={submitting} className="bg-amber-600 hover:bg-amber-700 text-white">
-                {submitting ? 'Joining...' : 'Join Tournament'}
+                {submitting ? 'Joining...' : (state.status === 'success' ? 'Joined ✅' : 'Join Tournament')}
               </Button>
             </div>
           </form>

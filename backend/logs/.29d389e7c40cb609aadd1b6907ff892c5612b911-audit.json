@@ -29,6 +29,11 @@
             "date": 1759499276129,
             "name": "D:\\chess-results\\backend\\logs\\error-2025-10-03.log",
             "hash": "dea6696db26422efb0171cd8a6d9dac913fe659e403cb61c44b504f4419085a9"
+        },
+        {
+            "date": 1759517048626,
+            "name": "D:\\chess-results\\backend\\logs\\error-2025-10-04.log",
+            "hash": "cf208fd87e98685f4c7bc5ed44e2d6157badb935b5b5df54fefedd7ab212a5da"
         }
     ],
     "hashType": "sha256"

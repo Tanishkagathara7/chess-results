@@ -365,6 +365,26 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
         }
     };
 
+    const refreshAddPlayersData = async () => {
+        if (!selectedTournament) return;
+        try {
+            const [participantsRes, playersRes] = await Promise.all([
+                axios.get(`${API}/tournaments/${selectedTournament.id}/participants`),
+                axios.get(`${API}/players`)
+            ]);
+            const participantPlayerIds = (participantsRes.data || []).map(p => p.player_id);
+            const available = (playersRes.data || [])
+                .filter(player => !participantPlayerIds.includes(player.id))
+                .map(p => ({ ...p, _linked: !!p.user_id }))
+                .sort((a, b) => (b._linked - a._linked) || (b.rating - a.rating));
+            setTournamentParticipants(participantsRes.data || []);
+            setAvailablePlayers(available);
+        } catch (e) {
+            console.error('Refresh add-players data failed', e);
+            showMessage('Failed to refresh players/participants', true);
+        }
+    };
+
     const handleAddSelectedPlayers = async () => {
         if (selectedPlayers.length === 0) {
             showMessage('Please select at least one player', true);
@@ -1615,9 +1635,12 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
                     <div className="space-y-4">
                         <div className="flex justify-between items-center">
                             <h3 className="font-medium">Current Participants</h3>
-                            <span className="text-sm text-gray-500">
-                                {tournamentParticipants.length} players
-                            </span>
+                            <div className="flex items-center gap-3">
+                                <span className="text-sm text-gray-500">
+                                    {tournamentParticipants.length} players
+                                </span>
+                                <Button variant="outline" size="sm" onClick={refreshAddPlayersData}>🔄 Refresh</Button>
+                            </div>
                         </div>
                         <div className="border rounded-lg overflow-hidden">
                             <div className="max-h-[400px] overflow-y-auto">

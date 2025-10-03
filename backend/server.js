@@ -875,8 +875,9 @@ app.post('/api/public/tournaments/:tournament_id/join', asyncHandler(async (req,
     // Find or create user
     let user = await db.collection('users').findOne({ email });
     if (user) {
-        // Optionally update missing phone/rating
+        // Optionally update missing fields and sync name if changed
         const updates = {};
+        if (name && name.trim() && user.name !== name.trim()) updates.name = name.trim();
         if (!user.phone && phone) updates.phone = phone;
         if (typeof rating === 'number' && rating >= 0 && (user.rating || 0) === 0) updates.rating = rating;
         if (Object.keys(updates).length > 0) {
@@ -888,7 +889,7 @@ app.post('/api/public/tournaments/:tournament_id/join', asyncHandler(async (req,
         const randomPass = crypto.randomBytes(16).toString('hex');
         const hashedPassword = await bcrypt.hash(randomPass, 12);
         user = createDocument({
-            name,
+            name: name?.trim() || '',
             email,
             password: hashedPassword,
             phone,
@@ -904,13 +905,22 @@ app.post('/api/public/tournaments/:tournament_id/join', asyncHandler(async (req,
     let player = await db.collection('players').findOne({ user_id: user.id });
     if (!player) {
         player = createDocument({
-            name,
+            name: name?.trim() || user.name || '',
             rating: rating || 0,
             title: '',
             birth_year: undefined,
             user_id: user.id
         });
         await db.collection('players').insertOne(player);
+    } else {
+        // Update player name/rating if provided
+        const pUpdates = {};
+        if (name && name.trim() && player.name !== name.trim()) pUpdates.name = name.trim();
+        if (typeof rating === 'number' && rating >= 0 && (player.rating || 0) === 0 && rating) pUpdates.rating = rating;
+        if (Object.keys(pUpdates).length > 0) {
+            await db.collection('players').updateOne({ id: player.id }, { $set: pUpdates });
+            player = { ...player, ...pUpdates };
+        }
     }
 
     // If already registered (active), respond gracefully
@@ -920,6 +930,14 @@ app.post('/api/public/tournaments/:tournament_id/join', asyncHandler(async (req,
         status: { $ne: 'withdrawn' }
     });
     if (existingActive) {
+        // Send confirmation email (non-blocking)
+        if (user?.email) {
+            try {
+                await mailer.sendTournamentDetailsEmail(user.email, tournament, player, { isApproval: false });
+            } catch (emailErr) {
+                console.warn('⚠️ Failed to send registration email (already registered):', emailErr.message);
+            }
+        }
         const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, process.env.JWT_SECRET, { expiresIn: '24h' });
         return res.json({
             message: 'You are already registered for this tournament',
@@ -957,6 +975,15 @@ app.post('/api/public/tournaments/:tournament_id/join', asyncHandler(async (req,
 
     // Issue token so user can access protected pages immediately
     const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, process.env.JWT_SECRET, { expiresIn: '24h' });
+
+    // Send confirmation email (non-blocking)
+    if (user?.email) {
+        try {
+            await mailer.sendTournamentDetailsEmail(user.email, tournament, player, {});
+        } catch (emailErr) {
+            console.warn('⚠️ Failed to send registration email:', emailErr.message);
+        }
+    }
 
     return res.json({
         message: 'Joined tournament successfully',
