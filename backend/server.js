@@ -18,6 +18,9 @@ const compression = require('compression');
 require('dotenv').config();
 const mailer = require('./utils/mailer');
 
+// Password hash cost (tunable). Lower rounds speed up joins on small instances.
+const BCRYPT_ROUNDS = parseInt(process.env.BCRYPT_ROUNDS || '10', 10);
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 
@@ -584,8 +587,8 @@ app.post('/api/auth/reset-password', asyncHandler(async (req, res) => {
         return res.status(400).json({ error: 'Invalid or expired reset token' });
     }
 
-    // Update password
-    const saltRounds = 12;
+    // Update password (use tunable rounds for performance)
+    const saltRounds = BCRYPT_ROUNDS;
     const hashedPassword = await bcrypt.hash(password, saltRounds);
 
     await db.collection('users').updateOne(
@@ -849,6 +852,7 @@ const publicJoinSchema = Joi.object({
  */
 app.post('/api/public/tournaments/:tournament_id/join', asyncHandler(async (req, res) => {
     const { tournament_id } = req.params;
+    const _t0 = Date.now();
 
     // Validate tournament exists
     const tournament = await db.collection('tournaments').findOne({ id: tournament_id });
@@ -885,9 +889,9 @@ app.post('/api/public/tournaments/:tournament_id/join', asyncHandler(async (req,
             user = { ...user, ...updates };
         }
     } else {
-        // Create new user with random password
+// Create new user with random password
         const randomPass = crypto.randomBytes(16).toString('hex');
-        const hashedPassword = await bcrypt.hash(randomPass, 12);
+        const hashedPassword = await bcrypt.hash(randomPass, BCRYPT_ROUNDS);
         user = createDocument({
             name: name?.trim() || '',
             email,
@@ -930,13 +934,12 @@ app.post('/api/public/tournaments/:tournament_id/join', asyncHandler(async (req,
         status: { $ne: 'withdrawn' }
     });
     if (existingActive) {
-        // Send confirmation email (non-blocking)
+// Send confirmation email (non-blocking)
         if (user?.email) {
-            try {
-                await mailer.sendTournamentDetailsEmail(user.email, tournament, player, { isApproval: false });
-            } catch (emailErr) {
-                console.warn('⚠️ Failed to send registration email (already registered):', emailErr.message);
-            }
+            // Fire-and-forget email to avoid blocking the HTTP response
+            mailer
+                .sendTournamentDetailsEmail(user.email, tournament, player, { isApproval: false })
+                .catch((emailErr) => console.warn('⚠️ Failed to send registration email (already registered):', emailErr.message));
         }
         const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, process.env.JWT_SECRET, { expiresIn: '24h' });
         return res.json({
@@ -976,14 +979,16 @@ app.post('/api/public/tournaments/:tournament_id/join', asyncHandler(async (req,
     // Issue token so user can access protected pages immediately
     const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, process.env.JWT_SECRET, { expiresIn: '24h' });
 
-    // Send confirmation email (non-blocking)
+// Send confirmation email (non-blocking)
     if (user?.email) {
-        try {
-            await mailer.sendTournamentDetailsEmail(user.email, tournament, player, {});
-        } catch (emailErr) {
-            console.warn('⚠️ Failed to send registration email:', emailErr.message);
-        }
+        // Fire-and-forget email to avoid blocking the HTTP response
+        mailer
+            .sendTournamentDetailsEmail(user.email, tournament, player, {})
+            .catch((emailErr) => console.warn('⚠️ Failed to send registration email:', emailErr.message));
     }
+
+    // Timing log for performance visibility
+    console.log(`⏱️ Public join completed in ${Date.now() - _t0}ms for tournament ${tournament_id} (user ${user.email})`);
 
     return res.json({
         message: 'Joined tournament successfully',
@@ -1623,6 +1628,19 @@ app.post('/api/tournaments/:tournament_id/pairings/generate', authenticateToken,
                     players: N,
                     requested_rounds: tournament.rounds,
                     max_rounds: maxRounds
+                });
+            }
+
+            // Enforce: allow at most two byes in round 1 for knockouts
+            // If players are less than (2^rounds - 2), there would be 3 or more byes.
+            const bracketSize = Math.pow(2, tournament.rounds);
+            const minPlayers = bracketSize - 2; // allow at most two byes
+            if (N < minPlayers) {
+                return res.status(400).json({
+                    error: `Cannot start knockout: ${tournament.rounds} rounds require at least ${minPlayers} players (to allow at most two byes in round 1). Currently have ${N}.`,
+                    players: N,
+                    required_min_players: minPlayers,
+                    rounds: tournament.rounds
                 });
             }
 
