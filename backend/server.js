@@ -65,10 +65,23 @@ app.use(morgan('combined', {
     stream: { write: (message) => logger.http(message.trim()) }
 }));
 
-app.use(cors({
-    origin: process.env.CORS_ORIGINS || '*',
-    credentials: true
-}));
+// Robust CORS: allow specific origins (comma-separated) or '*'. Also handle preflight globally.
+const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:3000,https://chess-results-xi.vercel.app').split(',').map(s => s.trim());
+const corsOptions = {
+    origin: function(origin, callback) {
+        // Allow non-browser or same-origin requests (no origin)
+        if (!origin) return callback(null, true);
+        if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
+            return callback(null, true);
+        }
+        return callback(new Error('Not allowed by CORS'));
+    },
+    credentials: true,
+    methods: ['GET','POST','PUT','DELETE','OPTIONS'],
+    allowedHeaders: ['Content-Type','Authorization'],
+};
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
@@ -600,6 +613,17 @@ app.post('/api/auth/reset-password', asyncHandler(async (req, res) => {
     );
 
     return res.json({ message: 'Password has been reset successfully' });
+}));
+
+// Simple unread notifications count endpoint (used by frontend header)
+app.get('/api/notifications/unread-count', authenticateToken, asyncHandler(async (req, res) => {
+    try {
+        const count = await db.collection('notifications').countDocuments({ user_id: req.user.id, read: false });
+        res.json({ count });
+    } catch (e) {
+        logger.error('Failed to fetch unread notification count:', e);
+        res.json({ count: 0 });
+    }
 }));
 
 app.get('/api/auth/verify', authenticateToken, (req, res) => {
