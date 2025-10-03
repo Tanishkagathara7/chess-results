@@ -1562,13 +1562,14 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
 
     const renderAddPlayersDialog = () => (
         <Dialog open={isAddPlayersDialogOpen} onOpenChange={setIsAddPlayersDialogOpen}>
-            <DialogContent className="max-w-4xl max-h-[80vh] overflow-hidden">
+            <DialogContent className="max-w-4xl max-h-[80vh] flex flex-col overflow-hidden">
                 <DialogHeader>
                     <DialogTitle>
                         Add Players to {selectedTournament?.name}
                     </DialogTitle>
                 </DialogHeader>
-                <div className="grid grid-cols-2 gap-6 h-[500px]">
+                <div className="flex-1 min-h-0 overflow-y-auto">
+                    <div className="grid grid-cols-2 gap-6">
                     {/* Available Players */}
                     <div className="space-y-4">
                         <div className="flex justify-between items-center">
@@ -1689,8 +1690,9 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
                         </div>
                     </div>
                 </div>
+                </div>
                 
-                <div className="flex justify-between items-center pt-4 border-t">
+                <div className="sticky bottom-0 bg-white dark:bg-gray-900 pt-4 border-t mt-4">
                     <div className="text-sm text-gray-600">
                         {selectedPlayers.length > 0 && (
                             <span>{selectedPlayers.length} player(s) selected</span>
