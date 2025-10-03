@@ -1161,7 +1161,12 @@ app.post('/api/tournaments/:tournament_id/participants', authenticateToken, asyn
     });
     
     if (existingActiveParticipant) {
-        return res.status(400).json({ error: 'Player is already registered for this tournament' });
+        // Treat as a no-op success to make admin bulk-add idempotent
+        return res.json({ 
+            message: 'Player is already registered for this tournament', 
+            participant: existingActiveParticipant,
+            already_registered: true
+        });
     }
     
     // Check for withdrawn records - we can reactivate instead of creating new
