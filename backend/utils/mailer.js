@@ -20,6 +20,15 @@ function createTransporter() {
     port,
     secure,
     auth: { user, pass },
+    pool: true,
+    maxConnections: 3,
+    maxMessages: 100,
+    connectionTimeout: 10000, // 10s
+    greetingTimeout: 10000,
+    socketTimeout: 15000,
+    tls: {
+      servername: host,
+    },
   });
 
   return t;

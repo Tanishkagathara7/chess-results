@@ -537,12 +537,12 @@ app.post('/api/auth/forgot-password', asyncHandler(async (req, res) => {
                 { $set: { password_reset_token: token, password_reset_expires: expires } }
             );
 
-            // Send email (no information leakage on failure)
-            try {
-                await mailer.sendPasswordResetEmail(email, token, { frontendUrl: process.env.FRONTEND_URL });
-            } catch (e) {
-                logger.error(`Failed to send password reset email to ${email}: ${e.message}`);
-            }
+            // Send email in background (no information leakage on failure)
+            // Do not await to keep API response fast even if SMTP is slow
+            mailer
+                .sendPasswordResetEmail(email, token, { frontendUrl: process.env.FRONTEND_URL })
+                .then(() => logger.info(`Password reset email queued/sent to ${email}`))
+                .catch((e) => logger.error(`Failed to send password reset email to ${email}: ${e.message}`));
 
             // Also log token in non-production for developer convenience
             if (process.env.NODE_ENV !== 'production') {
