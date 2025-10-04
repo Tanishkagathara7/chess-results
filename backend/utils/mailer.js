@@ -3,6 +3,40 @@ const logger = require('./logger');
 
 let transporter = null;
 
+async function sendViaResend({ to, subject, text, html, from }) {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) {
+    return { skipped: true, reason: 'resend_not_configured' };
+  }
+  const mailFrom = from || process.env.SMTP_FROM || `no-reply@${new URL(process.env.BACKEND_URL || 'http://localhost:3001').hostname}`;
+  try {
+    const resp = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: mailFrom,
+        to: Array.isArray(to) ? to : [to],
+        subject,
+        html,
+        text,
+      }),
+    });
+    if (!resp.ok) {
+      const body = await resp.text();
+      throw new Error(`Resend API ${resp.status}: ${body}`);
+    }
+    const data = await resp.json().catch(() => ({}));
+    logger.info(`Resend email accepted: ${data?.id || 'unknown id'}`);
+    return { messageId: data?.id || 'resend', provider: 'resend' };
+  } catch (e) {
+    logger.error('Resend send failed:', e);
+    throw e;
+  }
+}
+
 function createTransporter() {
   const host = process.env.SMTP_HOST;
   const port = parseInt(process.env.SMTP_PORT || '587', 10);
@@ -42,14 +76,18 @@ function getTransporter() {
 }
 
 async function sendMail({ to, subject, text, html, from }) {
+  const mailFrom = from || process.env.SMTP_FROM || `no-reply@${new URL(process.env.BACKEND_URL || 'http://localhost:3001').hostname}`;
   const t = getTransporter();
+
+  // If SMTP not configured, try Resend as a fallback
   if (!t) {
-    // Email not configured; pretend success to avoid leaking info to client
-    logger.warn(`Skipped sending email to ${to} (transporter not configured). Subject: ${subject}`);
+    if (process.env.RESEND_API_KEY) {
+      logger.warn('SMTP not configured; attempting Resend fallback');
+      return sendViaResend({ to, subject, text, html, from: mailFrom });
+    }
+    logger.warn(`Skipped sending email to ${to} (no mail provider configured). Subject: ${subject}`);
     return { skipped: true };
   }
-
-  const mailFrom = from || process.env.SMTP_FROM || `no-reply@${new URL(process.env.BACKEND_URL || 'http://localhost:3001').hostname}`;
 
   try {
     const info = await t.sendMail({ from: mailFrom, to, subject, text, html });
@@ -57,6 +95,11 @@ async function sendMail({ to, subject, text, html, from }) {
     return info;
   } catch (err) {
     logger.error('Error sending email:', err);
+    // Network issues like Connection timeout → try Resend if available
+    if (process.env.RESEND_API_KEY) {
+      logger.warn('Trying Resend fallback due to SMTP error...');
+      return sendViaResend({ to, subject, text, html, from: mailFrom });
+    }
     throw err;
   }
 }
