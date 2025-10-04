@@ -18,18 +18,47 @@ const ForgotPassword = () => {
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
 
+  // Simple retry helper for transient network/proxy errors (e.g., Render cold start)
+  const postWithRetry = async (url, data, { attempts = 3, delays = [800, 1500] } = {}) => {
+    let lastErr = null;
+    for (let i = 0; i < attempts; i++) {
+      try {
+        return await axios.post(url, data);
+      } catch (err) {
+        lastErr = err;
+        const status = err?.response?.status;
+        const isNetwork = !err.response; // connection reset / CORS / DNS / timeout
+        const isRetryable = isNetwork || (status >= 500 && status <= 599);
+        if (isRetryable && i < attempts - 1) {
+          // Show a hint on first retry
+          if (i === 0) {
+            setStatus('error');
+            setMessage('Server is waking up, retrying...');
+          }
+          const wait = delays[i] || 1200;
+          await new Promise(r => setTimeout(r, wait));
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw lastErr;
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
     setStatus(null);
     setMessage('');
     try {
-      await axios.post(`${API}/auth/forgot-password`, { email });
+      await postWithRetry(`${API}/auth/forgot-password`, { email });
       setStatus('success');
       setMessage('If an account with that email exists, we have sent password reset instructions.');
     } catch (err) {
       setStatus('error');
-      setMessage(err.response?.data?.error || 'Failed to submit request. Please try again.');
+      // Prefer server error if any; otherwise show generic message for connection issues
+      const fallback = 'Failed to submit request. Please try again in a moment.';
+      setMessage(err?.response?.data?.error || fallback);
     } finally {
       setLoading(false);
     }
