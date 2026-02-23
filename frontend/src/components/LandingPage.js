@@ -12,6 +12,29 @@ const LandingPage = () => {
     navigate('/auth');
   };
 
+  // Set page title and meta tags for SEO
+  useEffect(() => {
+    document.title = 'ChessTournaments - Professional Chess Tournament Management Platform';
+    
+    // Add or update meta description
+    let metaDescription = document.querySelector('meta[name="description"]');
+    if (!metaDescription) {
+      metaDescription = document.createElement('meta');
+      metaDescription.name = 'description';
+      document.head.appendChild(metaDescription);
+    }
+    metaDescription.content = 'Manage chess tournaments with Swiss system pairings, player databases, and real-time results tracking. Trusted by clubs and organizers worldwide.';
+
+    // Add favicon if not present
+    let favicon = document.querySelector('link[rel="icon"]');
+    if (!favicon) {
+      favicon = document.createElement('link');
+      favicon.rel = 'icon';
+      favicon.href = '/favicon.ico';
+      document.head.appendChild(favicon);
+    }
+  }, []);
+
   // Intersection Observer for scroll animations
   useEffect(() => {
     const observerOptions = {
@@ -340,13 +363,12 @@ const LandingPage = () => {
               
               {/* Main Heading - Second to appear */}
               <h1 className="text-4xl md:text-6xl font-extrabold tracking-tight mb-6 drop-shadow animate-fade-up-2">
-                <span className="text-premium-white font-light">Welcome to</span>
-                <span className="block premium-brand-gradient font-extrabold">ChessTournaments</span>
+                <span className="text-premium-white font-light">Professional Chess Tournament Management Platform</span>
               </h1>
               
               {/* Subtitle - Third to appear */}
               <p className="text-xl md:text-2xl text-premium-cream mb-10 max-w-3xl mx-auto animate-fade-up-3">
-                Manage tournaments, track players, and deliver beautiful results with a modern, fast UI.
+                Manage tournaments, track players, and deliver beautiful results with a modern, fast UI. <a href="#features" className="underline hover:text-amber-300 transition-colors">Explore our features</a> or <a href="#get-started" className="underline hover:text-amber-300 transition-colors">get started today</a>.
               </p>
               
               {/* CTA Section - Fourth to appear */}
@@ -371,7 +393,7 @@ const LandingPage = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-16">
             <h2 className="text-3xl md:text-4xl font-bold text-gray-900 dark:text-white mb-4 animate-on-scroll">
-              Everything You Need for Chess Tournaments
+              <a href="#features" className="hover:text-amber-600 transition-colors">Everything You Need for Chess Tournaments</a>
             </h2>
             <p className="text-xl text-gray-600 dark:text-gray-300 max-w-2xl mx-auto animate-on-scroll">
               Comprehensive tools to manage every aspect of your chess tournaments
@@ -455,10 +477,10 @@ const LandingPage = () => {
       </section>
 
       {/* CTA Section */}
-      <section id="cta" className="py-20 bg-gradient-to-r from-amber-600 to-orange-600">
+      <section id="get-started" className="py-20 bg-gradient-to-r from-amber-600 to-orange-600">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
           <h2 className="text-3xl md:text-4xl font-bold text-white mb-4 animate-on-scroll">
-            Ready to Start Your Chess Journey?
+            <a href="#get-started" className="hover:text-amber-100 transition-colors">Ready to Start Your Chess Journey?</a>
           </h2>
           <p className="text-xl text-blue-100 mb-8 animate-on-scroll">
             Join our platform today and experience the future of chess tournament management.
@@ -482,6 +504,13 @@ const LandingPage = () => {
               <Trophy className="h-6 w-6 text-amber-400" />
               <span className="text-lg font-semibold">ChessTournaments</span>
             </div>
+            <nav className="mb-4">
+              <ul className="flex justify-center gap-6 text-gray-400">
+                <li><a href="#features" className="hover:text-amber-400 transition-colors">Features</a></li>
+                <li><a href="#get-started" className="hover:text-amber-400 transition-colors">Get Started</a></li>
+                <li><a href="/auth" onClick={(e) => { e.preventDefault(); navigate('/auth'); }} className="hover:text-amber-400 transition-colors">Sign In</a></li>
+              </ul>
+            </nav>
             <p className="text-gray-400">
               © 2024 ChessTournaments. All rights reserved.
             </p>
