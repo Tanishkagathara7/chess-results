@@ -6,7 +6,7 @@ import { Input } from './ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Label } from './ui/label';
 import { useAuth } from '../contexts/AuthContext';
-import backgroundImg from '../img/background.jpeg';
+import backgroundImg from '../img/chess-board-background.jpeg';
 
 const AuthPage = () => {
   const navigate = useNavigate();
@@ -130,8 +130,18 @@ const AuthPage = () => {
   return (
     <div className="relative min-h-screen flex items-center justify-center py-10 px-4">
       <div className="absolute inset-0">
-        <img src={backgroundImg} alt="" className="w-full h-full object-cover" />
-        <div className="absolute inset-0 bg-black/50" />
+        <img 
+          src={backgroundImg} 
+          alt="" 
+          className="w-full h-full object-cover object-center"
+          style={{
+            imageRendering: 'crisp-edges',
+            backfaceVisibility: 'hidden',
+            transform: 'translateZ(0)',
+            filter: 'contrast(1.1) saturate(1.1)'
+          }}
+        />
+        <div className="absolute inset-0 bg-black/40" />
         <div className="absolute inset-x-0 bottom-0 h-28 md:h-36 bg-gradient-to-b from-transparent to-white" />
       </div>
       {/* Back button */}

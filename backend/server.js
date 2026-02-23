@@ -17,6 +17,7 @@ const { createRoundPairings: createKnockoutPairings, calculateKnockoutRounds, va
 const compression = require('compression');
 require('dotenv').config();
 const mailer = require('./utils/mailer');
+const TournamentAIAssistant = require('./utils/aiAssistant');
 
 // Password hash cost (tunable). Lower rounds speed up joins on small instances.
 const BCRYPT_ROUNDS = parseInt(process.env.BCRYPT_ROUNDS || '10', 10);
@@ -3244,6 +3245,20 @@ app.put('/api/notifications/mark-all-read', authenticateToken, asyncHandler(asyn
 }));
 
 
+// AI Assistant endpoint
+app.post('/api/ai-assistant', authenticateToken, asyncHandler(async (req, res) => {
+    const { command } = req.body;
+    
+    if (!command || typeof command !== 'string') {
+        return res.status(400).json({ error: 'Command is required' });
+    }
+    
+    const assistant = new TournamentAIAssistant(db);
+    const result = await assistant.processCommand(command, { userId: req.user.id });
+    
+    res.json(result);
+}));
+
 // Health check endpoint
 app.get('/health', (req, res) => {
     res.json({ 
@@ -3258,6 +3273,20 @@ app.get('/', (req, res) => {
     // Redirect to API docs for convenience in hosted environments (e.g., Render)
     res.redirect('/api-docs');
 });
+
+// AI Assistant endpoint
+app.post('/api/ai-assistant', authenticateToken, asyncHandler(async (req, res) => {
+    const { command } = req.body;
+    
+    if (!command || typeof command !== 'string') {
+        return res.status(400).json({ error: 'Command is required' });
+    }
+
+    const assistant = new TournamentAIAssistant(db);
+    const result = await assistant.processCommand(command, { userId: req.user.id });
+    
+    res.json(result);
+}));
 
 // 404 handler
 app.use('*', (req, res) => {

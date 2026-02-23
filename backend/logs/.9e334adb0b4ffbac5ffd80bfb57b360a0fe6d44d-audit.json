@@ -1,0 +1,20 @@
+{
+    "keep": {
+        "days": true,
+        "amount": 30
+    },
+    "auditLog": "D:\\projects\\chess-results\\backend\\logs\\.9e334adb0b4ffbac5ffd80bfb57b360a0fe6d44d-audit.json",
+    "files": [
+        {
+            "date": 1771398457863,
+            "name": "D:\\projects\\chess-results\\backend\\logs\\error-2026-02-18.log",
+            "hash": "2e9096d6a093a3c5c9f5d6b052c322d28d7c0bf5cc7952cc4039b8f9582ea77b"
+        },
+        {
+            "date": 1771814445366,
+            "name": "D:\\projects\\chess-results\\backend\\logs\\error-2026-02-23.log",
+            "hash": "f856d77733cb2db51e1c57c45e499114484544b482acb95a80cea4edebbbbddc"
+        }
+    ],
+    "hashType": "sha256"
+}

@@ -9,9 +9,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Badge } from './ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Alert, AlertDescription } from './ui/alert';
-import { Trophy, Users, Plus, Edit, Trash2, Calendar, MapPin, AlertCircle, Clock, CheckCircle, XCircle, Menu, X, ArrowLeft, Eye, Phone, Mail, Target, BarChart3, Gamepad2, Crown, Save, Link as LinkIcon } from 'lucide-react';
+import { Trophy, Users, Plus, Edit, Trash2, Calendar, MapPin, AlertCircle, Clock, CheckCircle, XCircle, Menu, X, ArrowLeft, Eye, Phone, Mail, Target, BarChart3, Gamepad2, Crown, Save, Link as LinkIcon, Bot } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { validateTournamentForm, formatDateError } from '../utils/validation';
+import AIAssistantQuickRef from './AIAssistantQuickRef';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:3001';
 const API = `${BACKEND_URL}/api`;
@@ -28,6 +29,24 @@ const AdminPanel = () => {
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
     const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+    // AI assistant state
+    const [assistantInput, setAssistantInput] = useState('');
+    const [assistantMessages, setAssistantMessages] = useState([
+        {
+            id: 1,
+            role: 'assistant',
+            text: '🤖 Hi! I\'m your AI Tournament Assistant. I can help you:\n\n' +
+                '📋 Create tournaments: "create tournament Spring Championship at New York from 2024-03-15 to 2024-03-17 with 5 rounds"\n' +
+                '👤 Add players: "add player John Doe with rating 1800"\n' +
+                '🎯 Register players: "add John Doe to Spring Championship"\n' +
+                '🚀 Start tournaments: "start tournament Spring Championship"\n' +
+                '📊 Get info: "list tournaments", "list players", "get player John Doe"\n' +
+                '🔄 Navigate: "go to tournaments", "show players", "open requests"\n\n' +
+                'Just type what you want to do!',
+        },
+    ]);
+    const [assistantWorking, setAssistantWorking] = useState(false);
 
     // Form states
     const [tournamentForm, setTournamentForm] = useState({
@@ -201,6 +220,87 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
             setError('');
             setSuccess('');
         }, 3000);
+    };
+
+    // Admin AI assistant: interpret simple text commands and trigger admin actions
+    const appendAssistantMessage = (role, text) => {
+        setAssistantMessages(prev => [
+            ...prev,
+            { id: prev.length ? prev[prev.length - 1].id + 1 : 1, role, text },
+        ]);
+    };
+
+    const handleAssistantSubmit = async (e) => {
+        e.preventDefault();
+        const command = assistantInput.trim();
+        if (!command) return;
+
+        appendAssistantMessage('user', command);
+        setAssistantInput('');
+        setAssistantWorking(true);
+
+        const lower = command.toLowerCase();
+
+        try {
+            // First check for navigation commands (local handling)
+            if (lower.includes('go to') || lower.includes('open') || lower.includes('show')) {
+                if (lower.includes('tournament')) {
+                    setActiveTab('tournaments');
+                    appendAssistantMessage('assistant', '✅ Switched to the Tournaments tab.');
+                    setAssistantWorking(false);
+                    return;
+                } else if (lower.includes('player')) {
+                    setActiveTab('players');
+                    appendAssistantMessage('assistant', '✅ Switched to the Players tab.');
+                    setAssistantWorking(false);
+                    return;
+                } else if (lower.includes('request')) {
+                    setActiveTab('requests');
+                    appendAssistantMessage('assistant', '✅ Switched to the Requests tab.');
+                    setAssistantWorking(false);
+                    return;
+                } else if (lower.includes('pairing')) {
+                    setActiveTab('pairings');
+                    appendAssistantMessage('assistant', '✅ Switched to the Pairings tab.');
+                    setAssistantWorking(false);
+                    return;
+                } else if (lower.includes('result')) {
+                    setActiveTab('results');
+                    appendAssistantMessage('assistant', '✅ Switched to the Results tab.');
+                    setAssistantWorking(false);
+                    return;
+                }
+            }
+
+            // Refresh data (local handling)
+            if (lower.includes('refresh') || lower.includes('reload')) {
+                await fetchAllData();
+                appendAssistantMessage('assistant', '✅ Refreshed tournaments, players and requests from the server.');
+                setAssistantWorking(false);
+                return;
+            }
+
+            // Send to backend AI assistant for advanced commands
+            const token = localStorage.getItem('token');
+            const response = await axios.post(
+                `${API}/ai-assistant`,
+                { command },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+
+            if (response.data.success) {
+                appendAssistantMessage('assistant', response.data.message);
+                // Refresh data after successful operations
+                await fetchAllData();
+            } else {
+                appendAssistantMessage('assistant', response.data.message);
+            }
+        } catch (err) {
+            console.error('Assistant command error:', err);
+            appendAssistantMessage('assistant', '❌ Something went wrong: ' + (err.response?.data?.error || err.message));
+        } finally {
+            setAssistantWorking(false);
+        }
     };
 
     // Tournament operations
@@ -1898,6 +1998,26 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
                                 <span>Results</span>
                             </div>
                         </button>
+
+                        <button
+                            onClick={() => setActiveTab('assistant')}
+                            className={`group w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 hover:shadow-md ${
+                                activeTab === 'assistant'
+                                    ? 'bg-gradient-to-r from-teal-500/10 to-cyan-500/10 text-teal-700 dark:text-teal-400 border border-teal-200/50 dark:border-teal-500/30 shadow-lg shadow-teal-100/50 dark:shadow-teal-900/20'
+                                    : 'text-slate-600 hover:text-slate-800 hover:bg-slate-100/80 dark:text-gray-300 dark:hover:text-gray-100 dark:hover:bg-gray-800/80'
+                            }`}
+                        >
+                            <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
+                                activeTab === 'assistant'
+                                    ? 'bg-gradient-to-br from-teal-500 to-cyan-500 text-white'
+                                    : 'bg-slate-200/80 text-slate-600 group-hover:bg-slate-300 dark:bg-gray-700 dark:text-gray-300'
+                            }`}>
+                                <Bot className="h-4 w-4" />
+                            </div>
+                            <div className="flex-1">
+                                <span>AI Assistant</span>
+                            </div>
+                        </button>
                     </nav>
 
                     {/* Footer */}
@@ -2871,6 +2991,50 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
                 </Card>
             )}
 
+            {activeTab === 'assistant' && (
+                <Card className="w-full">
+                    <CardHeader>
+                        <CardTitle>🤖 Admin AI Assistant</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <AIAssistantQuickRef />
+                        
+                        <p className="text-sm text-gray-600">
+                            Type commands in natural language. I can create tournaments, add players, register participants, and more!
+                        </p>
+
+                        <div className="border rounded-md h-96 overflow-y-auto bg-gray-50/60 dark:bg-gray-900/40 p-3 space-y-2">
+                            {assistantMessages.map(msg => (
+                                <div
+                                    key={msg.id}
+                                    className={`text-sm ${
+                                        msg.role === 'assistant'
+                                            ? 'text-gray-800 dark:text-gray-100'
+                                            : 'text-blue-700 dark:text-blue-300 text-right'
+                                    }`}
+                                >
+                                    <span className="block whitespace-pre-line">
+                                        {msg.role === 'assistant' ? 'Assistant: ' : 'You: '}
+                                        {msg.text}
+                                    </span>
+                                </div>
+                            ))}
+                        </div>
+
+                        <form onSubmit={handleAssistantSubmit} className="flex flex-col sm:flex-row gap-2">
+                            <Input
+                                value={assistantInput}
+                                onChange={(e) => setAssistantInput(e.target.value)}
+                                placeholder="E.g. refresh data, go to players, approve request 5"
+                            />
+                            <Button type="submit" disabled={assistantWorking || !assistantInput.trim()}>
+                                {assistantWorking ? 'Working...' : 'Send'}
+                            </Button>
+                        </form>
+                    </CardContent>
+                </Card>
+            )}
+
                 </div>
             </div>
 
@@ -3028,6 +3192,26 @@ const [availablePlayers, setAvailablePlayers] = useState([]);
                                 </div>
                                 <div className="flex-1">
                                     <span>Results</span>
+                                </div>
+                            </button>
+
+                            <button 
+                                onClick={() => { setActiveTab('assistant'); setMobileNavOpen(false); }} 
+                                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 ${
+                                    activeTab === 'assistant'
+                                        ? 'bg-gradient-to-r from-teal-500/10 to-cyan-500/10 text-teal-700 dark:text-teal-400 border border-teal-200/50 dark:border-teal-500/30 shadow-lg'
+                                        : 'text-slate-600 hover:text-slate-800 hover:bg-slate-100/80 dark:text-gray-300 dark:hover:text-gray-100 dark:hover:bg-gray-800/80'
+                                }`}
+                            >
+                                <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
+                                    activeTab === 'assistant'
+                                        ? 'bg-gradient-to-br from-teal-500 to-cyan-500 text-white'
+                                        : 'bg-slate-200/80 text-slate-600 dark:bg-gray-700 dark:text-gray-300'
+                                }`}>
+                                    <Bot className="h-4 w-4" />
+                                </div>
+                                <div className="flex-1">
+                                    <span>AI Assistant</span>
                                 </div>
                             </button>
                         </nav>

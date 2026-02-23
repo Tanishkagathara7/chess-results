@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Button } from './ui/button';
-import backgroundImg from '../img/background.jpeg';
+import backgroundImg from '../img/chess-board-background.jpeg';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:3001';
 const API = `${BACKEND_URL}/api`;
@@ -68,7 +68,17 @@ const ForgotPassword = () => {
     <div className="relative min-h-screen flex items-center justify-center py-10 px-4">
       {/* Background image with overlay and bottom fade */}
       <div className="absolute inset-0">
-        <img src={backgroundImg} alt="" className="w-full h-full object-cover" />
+        <img 
+          src={backgroundImg} 
+          alt="" 
+          className="w-full h-full object-cover object-center"
+          style={{
+            imageRendering: 'crisp-edges',
+            backfaceVisibility: 'hidden',
+            transform: 'translateZ(0)',
+            filter: 'contrast(1.1) saturate(1.1)'
+          }}
+        />
         <div className="absolute inset-0 bg-black/50" />
         <div className="absolute inset-x-0 bottom-0 h-28 md:h-36 bg-gradient-to-b from-transparent to-white" />
       </div>
